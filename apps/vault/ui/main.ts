@@ -1,5 +1,5 @@
-// Vault's window: set up, unlock, and the 2FA codes. Everything secret is opened here, on the device;
-// what the platform layer stores is the sealed file.
+// Vault's window: sign in with the marobotic account, and the 2FA codes. Everything secret is opened
+// here, on the device; the copy on this PC and the one on the server are both sealed.
 import { init, KDF_V1 } from "@marobotic/crypto";
 import { totp, normalizeEntry, type OtpEntry } from "@marobotic/otp";
 import { importText, type ImportResult } from "@marobotic/importers";
@@ -9,13 +9,17 @@ import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
 const jsQR = ((jsQRModule as unknown as { default?: unknown }).default ?? jsQRModule) as unknown as typeof import("jsqr").default;
 import * as platform from "./platform.ts";
+import * as account from "./account.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 const app = $("#app");
 const LOCK_AFTER_MS = 10 * 60_000;
 
 let vault: Vault | null = null;
-let file: VaultFile | null = null;
+let file: VaultFile | null = null;      // the sealed copy on this PC (null before the first sign-in here)
+let session: string | null = null;      // the account session; null = offline, changes stay on this PC
+let rev = 0;                            // the server version this vault is based on
+let syncing: Promise<void> | null = null;
 let query = "";
 let lastActive = Date.now();
 let autoXl = localStorage.getItem("vault.autoXl") === "1";
@@ -41,38 +45,112 @@ async function save() {
   if (!vault) return;
   file = vault.toFile();
   await platform.saveVault(JSON.stringify(file));
+  void sync();
 }
 
-// ------------------------------------------------------------------ first run
-function setupScreen() {
+/** Send this PC's vault to the server; when another device saved first, take its changes in and try again. */
+function sync(): Promise<void> {
+  if (!session || !vault) return Promise.resolve();
+  return (syncing ??= (async () => {
+    try {
+      for (let i = 0; i < 3 && vault && session; i++) {
+        const r = await account.pushVault(session, rev, vault.toFile());
+        if ("rev" in r) { rev = r.rev; setSyncState("synced"); return; }
+        rev = r.conflict.rev;
+        if (vault.merge(r.conflict.file.items)) { file = vault.toFile(); await platform.saveVault(JSON.stringify(file)); renderList(); }
+      }
+    } catch (e) {
+      setSyncState(e instanceof account.SignInError ? "signed out" : "offline");
+      if (e instanceof account.SignInError) session = null;
+    } finally {
+      syncing = null;
+    }
+  })());
+}
+
+function setSyncState(state: "synced" | "offline" | "signed out") {
+  const el = document.getElementById("sync");
+  if (!el) return;
+  el.textContent = state === "synced" ? "Synced" : state === "offline" ? "Offline - saved on this PC" : "Signed out - saved on this PC";
+  el.style.setProperty("--state", state === "synced" ? "var(--teal)" : "var(--orange)");
+}
+
+// ------------------------------------------------------------------ sign in
+function signInScreen(message = "") {
+  vault = null;
+  session = null;
+  stopAutoXl();
+  const last = file?.email || localStorage.getItem("vault.email") || "";
   app.replaceChildren(h(`
     <form class="gate">
       <div class="brand"><span class="logo"></span> Vault</div>
-      <h1>Set up your vault</h1>
-      <p>Use your marobotic account's email and password. They encrypt the vault here, on this PC; the server will only ever store it sealed.</p>
-      <label class="lab" for="em">Email</label><input id="em" class="m-field" type="email" autocomplete="username" required>
-      <label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="new-password" required minlength="8">
-      <label class="lab" for="pw2">Password again</label><input id="pw2" class="m-field" type="password" autocomplete="new-password" required>
-      <div class="err" id="err"></div>
-      <button class="m-btn primary" type="submit">Create vault</button>
+      <h1>Sign in</h1>
+      <p>Your marobotic account, the same as Hourglass and Jukebox. Your vault is sealed on this device with your password; the server only keeps the sealed copy.</p>
+      <label class="lab" for="em">Email</label><input id="em" class="m-field" type="email" autocomplete="username" required value="${esc(last)}">
+      <label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="current-password" required>
+      <div class="err" id="err">${esc(message)}</div>
+      <button class="m-btn primary" type="submit">Sign in</button>
     </form>`));
   const form = $<HTMLFormElement>("form", app);
-  $("#em", form).focus();
+  $(last ? "#pw" : "#em", form).focus();
   form.onsubmit = async (ev) => {
     ev.preventDefault();
-    const email = $<HTMLInputElement>("#em").value.trim();
+    const email = $<HTMLInputElement>("#em").value.trim().toLowerCase();
     const pw = $<HTMLInputElement>("#pw").value;
-    if (pw !== $<HTMLInputElement>("#pw2").value) return void ($("#err").textContent = "The two passwords are different.");
-    if (pw.length < 8) return void ($("#err").textContent = "Use at least 8 characters.");
-    $("#err").textContent = "";
-    const btn = $<HTMLButtonElement>("button", form);
-    btn.disabled = true; btn.textContent = "Creating…";
+    const btn = $<HTMLButtonElement>("button[type=submit]", form);
+    btn.disabled = true; btn.textContent = "Signing in…";
     await new Promise((r) => setTimeout(r, 30)); // let the label paint before Argon2 runs
+    try {
+      await openAccount(email, pw);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "Sign in";
+      $("#err").textContent = (e as Error).message;
+    }
+  };
+}
+
+/** Sign in, then: the server's vault (with this PC's offline changes merged in), this PC's vault
+ *  uploaded, or a brand-new vault for an account that has none yet. */
+async function openAccount(email: string, pw: string) {
+  localStorage.setItem("vault.email", email);
+  const localFile = file && file.email === email ? file : null;
+  try {
+    session = await account.signIn(email, pw);
+  } catch (e) {
+    if (e instanceof account.Offline && localFile) {
+      vault = unlockOrNull(localFile, pw);
+      if (!vault) throw new Error("That password doesn't open the copy on this PC.");
+      codesScreen();
+      setSyncState("offline");
+      return;
+    }
+    throw e instanceof account.Offline ? new Error(`${e.message}, and there is no copy of this vault on this PC yet.`) : e;
+  }
+  const remote = await account.fetchVault(session);
+  if (remote) {
+    rev = remote.rev;
+    vault = unlockOrNull(remote.file, pw);
+    if (!vault) return recoveryUnlockScreen(remote.file, pw);   // the account password changed since
+    if (localFile) {
+      const mine = unlockOrNull(localFile, pw);
+      if (mine) vault.merge(mine.toFile().items);
+    }
+  } else if (localFile && unlockOrNull(localFile, pw)) {
+    vault = unlockOrNull(localFile, pw);
+    rev = 0;
+  } else {
     const made = Vault.create(email, pw, { kdf: KDF_V1 });
     vault = made.vault;
+    rev = 0;
     await save();
-    recoveryScreen(made.recoveryCode);
-  };
+    return recoveryScreen(made.recoveryCode);
+  }
+  await save();
+  codesScreen();
+}
+
+function unlockOrNull(f: VaultFile, pw: string): Vault | null {
+  try { return Vault.unlock(f, pw); } catch { return null; }
 }
 
 function recoveryScreen(code: string) {
@@ -80,7 +158,7 @@ function recoveryScreen(code: string) {
     <div class="gate">
       <div class="brand"><span class="logo"></span> Vault</div>
       <h1>Your recovery kit</h1>
-      <p>Write this down or print it, and keep it somewhere safe. It is the <b>only</b> way back into this vault if your account password is ever reset. It is shown once; nobody, including the server, can show it again.</p>
+      <p>Your vault is ready. Write this down or print it and keep it somewhere safe: it is the <b>only</b> way back into your vault if your account password is ever reset. It is shown once; nobody, including the server, can show it again.</p>
       <div class="kit">${esc(code)}</div>
       <button class="m-btn" id="copy"> Copy</button>
       <label class="check"><input type="checkbox" id="ok"> I have written it down</label>
@@ -91,59 +169,28 @@ function recoveryScreen(code: string) {
   $("#go").onclick = () => codesScreen();
 }
 
-// ------------------------------------------------------------------ unlock
-function unlockScreen(message = "") {
-  vault = null;
-  stopAutoXl();
+/** The account password changed since the vault was sealed: the recovery kit opens it, then it is
+ *  sealed again for the password just used. */
+function recoveryUnlockScreen(sealed: VaultFile, newPassword: string) {
   app.replaceChildren(h(`
     <form class="gate">
       <div class="brand"><span class="logo"></span> Vault</div>
-      <h1>Unlock</h1>
-      <p>${esc(file!.email)}</p>
-      <input id="pw" class="m-field" type="password" autocomplete="current-password" placeholder="Password" required>
-      <div class="err" id="err">${esc(message)}</div>
-      <button class="m-btn primary" type="submit">Unlock</button>
-      <button class="m-btn subtle" type="button" id="rec">Use the recovery kit instead</button>
-    </form>`));
-  const form = $<HTMLFormElement>("form", app);
-  $("#pw", form).focus();
-  form.onsubmit = async (ev) => {
-    ev.preventDefault();
-    const btn = $<HTMLButtonElement>("button[type=submit]", form);
-    btn.disabled = true; btn.textContent = "Unlocking…";
-    await new Promise((r) => setTimeout(r, 30));
-    try {
-      vault = Vault.unlock(file!, $<HTMLInputElement>("#pw").value);
-      codesScreen();
-    } catch (e) {
-      btn.disabled = false; btn.textContent = "Unlock";
-      $("#err").textContent = (e as Error).message === "wrong password" ? "That password doesn't open this vault." : (e as Error).message;
-    }
-  };
-  $("#rec").onclick = () => recoveryUnlockScreen();
-}
-
-function recoveryUnlockScreen() {
-  app.replaceChildren(h(`
-    <form class="gate">
-      <div class="brand"><span class="logo"></span> Vault</div>
-      <h1>Recovery kit</h1>
-      <p>Type the 52 letters from your recovery kit (dashes and spaces don't matter), then choose the password the vault opens with from now on.</p>
+      <h1>Your password changed</h1>
+      <p>You signed in, but your vault is still sealed with your old password. Type the 52 letters from your recovery kit (dashes and spaces don't matter) and the vault opens with your current password from now on.</p>
       <textarea id="code" class="m-field" style="height:90px;padding:10px" required></textarea>
-      <input id="pw" class="m-field" type="password" placeholder="New password" autocomplete="new-password" minlength="8" required>
       <div class="err" id="err"></div>
-      <button class="m-btn primary" type="submit">Open and set the password</button>
+      <button class="m-btn primary" type="submit">Open my vault</button>
       <button class="m-btn subtle" type="button" id="back">Back</button>
     </form>`));
-  $("#back").onclick = () => unlockScreen();
+  $("#back").onclick = () => signInScreen();
   $<HTMLFormElement>("form", app).onsubmit = async (ev) => {
     ev.preventDefault();
     try {
-      vault = Vault.unlockWithRecovery(file!, $<HTMLTextAreaElement>("#code").value);
-      vault.setPassword($<HTMLInputElement>("#pw").value);
+      vault = Vault.unlockWithRecovery(sealed, $<HTMLTextAreaElement>("#code").value);
+      vault.setPassword(newPassword);
       await save();
       codesScreen();
-      toast("Opened with the recovery kit; the vault now opens with your new password");
+      toast("Opened with the recovery kit; the vault now opens with your current password");
     } catch (e) {
       $("#err").textContent = (e as Error).message;
     }
@@ -162,14 +209,16 @@ function codesScreen() {
       <button class="m-btn primary compact" id="add"> Add</button>
       <button class="m-btn compact" id="lock" title="Lock"> Lock</button>
     </div>
+    <div class="m-sync sync-line" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
     <input class="m-field search" id="q" placeholder="Search" value="${esc(query)}">
     <h2 class="m-section">2FA CODES <span class="detail" id="count"></span></h2>
     <div id="list"></div>`));
   $("#add").onclick = () => addModal();
-  $("#lock").onclick = () => unlockScreen();
+  $("#lock").onclick = () => signInScreen();
   $<HTMLInputElement>("#q").oninput = (e) => { query = (e.target as HTMLInputElement).value; renderList(); };
   renderList();
   if (autoXl) startAutoXl();
+  if (session) void sync();
 }
 
 function renderList() {
@@ -350,17 +399,17 @@ async function readQr(f: File): Promise<string | null> {
 // ------------------------------------------------------------------ start
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
 setInterval(() => {
-  if (vault && Date.now() - lastActive > LOCK_AFTER_MS) unlockScreen("Locked after 10 minutes without use.");
+  if (vault && Date.now() - lastActive > LOCK_AFTER_MS) signInScreen("Locked after 10 minutes without use.");
   else if (vault) tick();
 }, 1000);
 
 (async () => {
   await init();
   const text = await platform.loadVault();
-  if (!text) return setupScreen();
+  if (!text) return signInScreen();
   try {
     file = JSON.parse(text) as VaultFile;
-    unlockScreen();
+    signInScreen();
   } catch {
     app.replaceChildren(h(`<div class="center">The vault file couldn't be read. It has not been changed.<br><span class="faint">${esc(await platform.vaultPath())}</span></div>`));
   }

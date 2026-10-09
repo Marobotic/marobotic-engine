@@ -1,13 +1,14 @@
 // Builds Vault's window into dist/: one bundled script, the Marochy kit and the shared font.
 // The Tauri shell loads dist/ as its frontend; `node build.mjs` is all it needs.
 import { build } from "esbuild";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const dist = here("./dist/");
-rmSync(dist, { recursive: true, force: true });
+// Empty dist/ rather than delete it: a window or server holding the folder open must not break a build.
 mkdirSync(dist, { recursive: true });
+for (const f of readdirSync(dist)) rmSync(`${dist}${f}`, { recursive: true, force: true });
 await build({
   entryPoints: [here("./ui/main.ts")],
   bundle: true,

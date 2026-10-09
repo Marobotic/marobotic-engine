@@ -45,3 +45,4 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .drop:hover { border-color: var(--fg); color: var(--fg); }
 
 #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
+.sync-line { margin: -8px 0 14px; font-size: 12px; }
