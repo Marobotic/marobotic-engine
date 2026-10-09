@@ -153,12 +153,12 @@ function unlockOrNull(f: VaultFile, pw: string): Vault | null {
   try { return Vault.unlock(f, pw); } catch { return null; }
 }
 
-function recoveryScreen(code: string) {
+function recoveryScreen(code: string, replaced = false) {
   app.replaceChildren(h(`
     <div class="gate">
       <div class="brand"><span class="logo"></span> Vault</div>
       <h1>Your recovery kit</h1>
-      <p>Your vault is ready. Write this down or print it and keep it somewhere safe: it is the <b>only</b> way back into your vault if your account password is ever reset. It is shown once; nobody, including the server, can show it again.</p>
+      <p>${replaced ? "This replaces your old recovery kit, which no longer opens your vault." : "Your vault is ready."} Write this down or print it and keep it somewhere safe: it is the <b>only</b> way back into your vault if your account password is ever reset. It is shown once; nobody, including the server, can show it again.</p>
       <div class="kit">${esc(code)}</div>
       <button class="m-btn" id="copy"> Copy</button>
       <label class="check"><input type="checkbox" id="ok"> I have written it down</label>
@@ -208,6 +208,7 @@ function codesScreen() {
       <div class="brand grow"><span class="logo"></span> Vault</div>
       <button class="m-btn primary compact" id="add"> Add</button>
       <button class="m-btn compact" id="lock" title="Lock"> Lock</button>
+      <button class="m-btn subtle compact" id="kit" title="Make a new recovery kit; the old one stops working"> Recovery kit</button>
     </div>
     <div class="m-sync sync-line" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
     <input class="m-field search" id="q" placeholder="Search" value="${esc(query)}">
@@ -215,6 +216,12 @@ function codesScreen() {
     <div id="list"></div>`));
   $("#add").onclick = () => addModal();
   $("#lock").onclick = () => signInScreen();
+  $("#kit").onclick = async () => {
+    if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
+    const code = vault!.newRecoveryKit();
+    await save();
+    recoveryScreen(code, true);
+  };
   $<HTMLInputElement>("#q").oninput = (e) => { query = (e.target as HTMLInputElement).value; renderList(); };
   renderList();
   if (autoXl) startAutoXl();

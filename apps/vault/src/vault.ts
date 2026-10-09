@@ -109,6 +109,14 @@ export class Vault {
     return changed;
   }
 
+  /** A fresh recovery kit: the vault key is sealed for a new code and the old code stops working.
+   *  Returns the new code, to show once. */
+  newRecoveryKit(): string {
+    const r = newRecoveryCode();
+    this.file = { ...this.file, byRecovery: seal(r.key, this.key, "vault-key") };
+    return r.code;
+  }
+
   /** New account password (also after a reset + recovery): only the vault key is sealed again. */
   setPassword(newPassword: string) {
     const { wrapKey } = deriveKeys(this.file.email, newPassword, this.file.kdf);

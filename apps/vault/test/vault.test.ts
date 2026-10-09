@@ -45,6 +45,17 @@ test("password reset: recovery kit opens the vault, setPassword seals it for the
   assert.equal(after.list("totp").length, 1);
 });
 
+test("a new recovery kit replaces the old one; the password and the items are untouched", () => {
+  const { vault, recoveryCode: oldCode } = Vault.create("a@b.c", "pw", { kdf: FAST });
+  vault.add({ type: "totp", otp: github });
+  const newCode = vault.newRecoveryKit();
+  assert.notEqual(newCode, oldCode);
+  const file = vault.toFile();
+  assert.throws(() => Vault.unlockWithRecovery(file, oldCode), /does not open/);
+  assert.equal(Vault.unlockWithRecovery(file, newCode).list("totp").length, 1);
+  assert.equal(Vault.unlock(file, "pw").list("totp").length, 1);
+});
+
 test("two devices: newer edits win, deletions travel too", () => {
   let t = 1000;
   const clock = () => t++;
