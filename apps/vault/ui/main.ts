@@ -6,6 +6,7 @@ import { importText, importPasswordCsv, type ImportResult } from "@marobotic/imp
 import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem } from "../src/vault.ts";
 import { findFfxivEntry, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
+import { monogram, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
 const jsQR = ((jsQRModule as unknown as { default?: unknown }).default ?? jsQRModule) as unknown as typeof import("jsqr").default;
@@ -265,8 +266,9 @@ const matchesQuery = (hay: string) => { const q = query.trim().toLowerCase(); re
 function renderList() {
   const list = $("#list");
   if (!list) return;
-  const ls = logins().sort((a, b) => a.data.name.localeCompare(b.data.name));
-  const ts = otps().sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  const pinFirst = (af: boolean, bf: boolean) => (bf ? 1 : 0) - (af ? 1 : 0);
+  const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || a.data.name.localeCompare(b.data.name));
+  const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
   if (filter !== "totp") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
   const ff = findFfxivEntry(ts.map((i) => i.data.otp));
@@ -281,8 +283,38 @@ function renderList() {
     $("#e2")?.addEventListener("click", () => addModal("codes"));
     return;
   }
+  closeMenu();
   list.replaceChildren(...rows);
   tick();
+}
+
+async function togglePin(i: LoginRow | TotpRow) {
+  vault!.update(i.id, { ...i.data, favorite: !i.data.favorite });
+  await save();
+  renderList();
+}
+
+/** A row's menu, from a right-click point or next to its ⋯ button (copy, pin, edit, delete). */
+function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
+  const pin = { label: i.data.favorite ? "Unpin" : "Pin to top", icon: "", checked: !!i.data.favorite, onClick: () => void togglePin(i) };
+  const del = {
+    label: "Delete", icon: "", danger: true, onClick: async () => {
+      const name = i.data.type === "login" ? i.data.name : nameOf(i as TotpRow);
+      if (!confirm(`Delete ${name}? Make sure you can still sign in another way.`)) return;
+      vault!.remove(i.id); await save(); renderList();
+    },
+  };
+  if (i.data.type === "login") {
+    const d = i.data, linked = codeFor(d);
+    const copies: MenuSection["items"] = [];
+    if (d.password) copies.push({ label: "Copy password", icon: "", onClick: () => void copy(d.password, `${d.name}: password copied (clears in 30s)`, 30_000) });
+    if (d.username) copies.push({ label: "Copy username", icon: "", onClick: () => void copy(d.username, `${d.name}: username copied`) });
+    if (linked) copies.push({ label: "Copy 2FA code", icon: "", onClick: async () => void copy((await totp(linked)).code, `${d.name}: 2FA code copied`) });
+    openMenu(x, y, [{ title: d.name, items: copies }, { items: [pin, { label: "Edit", icon: "", onClick: () => loginEditor(i as LoginRow) }] }, { items: [del] }]);
+  } else {
+    const t = i as TotpRow;
+    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "", onClick: async () => void copy((await totp(t.data.otp)).code, `${nameOf(t)}: code copied`) }] }, { items: [pin] }, { items: [del] }]);
+  }
 }
 
 function loginRow(i: LoginRow): HTMLElement {
@@ -291,27 +323,31 @@ function loginRow(i: LoginRow): HTMLElement {
   const linked = codeFor(d);
   const row = h(`
     <div class="item login" data-login="${i.id}">
-      <div class="who"><b>${esc(d.name)}</b><span>${esc(d.username)}${host ? " · " + esc(host) : ""}</span></div>
+      <div class="who"><span class="tileslot"></span><div class="txt"><b>${d.favorite ? '<span class="pin"></span> ' : ""}${esc(d.name)}</b><span>${esc(d.username)}${host ? " · " + esc(host) : ""}</span></div></div>
       <div class="actions">
         ${d.username ? `<button class="m-btn subtle compact" data-cuser> User</button>` : ""}
         ${d.password ? `<button class="m-btn subtle compact" data-cpass> Password</button>` : ""}
-        ${linked ? `<span class="mini" title="${esc(linked.issuer || linked.account)} 2FA"><span class="mono" data-code>······</span><span class="m-level mini-bar"><i data-bar></i></span><button class="m-btn subtle compact" data-ccode>Copy</button></span>` : ""}
+        ${linked ? `<span class="mini" title="2FA code"><span class="mono" data-code>······</span><span class="m-level mini-bar"><i data-bar></i></span><button class="m-btn subtle compact" data-ccode>Copy</button></span>` : ""}
         <span class="grow"></span>
         <button class="m-btn subtle compact" data-edit title="Edit"></button>
+        <button class="m-btn subtle compact" data-menu title="More"></button>
       </div>
     </div>`).firstElementChild as HTMLElement;
-  if (linked) (row as HTMLElement).dataset.code = JSON.stringify({}); // marks it for tick()
-  row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => copy(d.username, `${d.name}: username copied`));
-  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => copy(d.password, `${d.name}: password copied (clears in 30s)`, 30_000));
+  if (linked) row.dataset.code = "1"; // marks it for tick()
+  row.querySelector(".tileslot")!.replaceWith(monogram(d.name));
+  row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => void copy(d.username, `${d.name}: username copied`));
+  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => void copy(d.password, `${d.name}: password copied (clears in 30s)`, 30_000));
   row.querySelector<HTMLElement>("[data-ccode]")?.addEventListener("click", async () => { if (linked) await copy((await totp(linked)).code, `${d.name}: 2FA code copied`); });
   row.querySelector<HTMLElement>("[data-edit]")!.onclick = () => loginEditor(i);
+  row.querySelector<HTMLElement>("[data-menu]")!.onclick = (e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); rowMenu(i, r.left, r.bottom + 4); };
+  row.oncontextmenu = (e) => { e.preventDefault(); rowMenu(i, e.clientX, e.clientY); };
   return row;
 }
 
 function codeRow(i: TotpRow, isFf: boolean): HTMLElement {
   const row = h(`
     <div class="code-row" data-id="${i.id}" style="border-left-color:${isFf ? "var(--gold)" : "var(--border)"}">
-      <div class="who"><b>${esc(nameOf(i))}</b><span>${esc(i.data.otp.account)}</span></div>
+      <div class="who"><span class="tileslot"></span><div class="txt"><b>${i.data.favorite ? '<span class="pin"></span> ' : ""}${esc(nameOf(i))}</b><span>${esc(i.data.otp.account)}</span></div></div>
       <div class="code" data-code>······</div>
       <div class="m-level"><i data-bar></i></div>
       <div class="actions">
@@ -319,19 +355,16 @@ function codeRow(i: TotpRow, isFf: boolean): HTMLElement {
                   <span class="m-switch ${autoXl ? "on" : ""}" data-auto title="Send it by itself whenever XIVLauncher asks"></span>
                   <span class="note">Auto-send when XIVLauncher asks</span>` : ""}
         <span class="grow" style="flex:1"></span>
-        <button class="m-btn subtle compact trash" data-del title="Remove"></button>
+        <button class="m-btn subtle compact" data-menu title="More"></button>
       </div>
     </div>`).firstElementChild as HTMLElement;
+  row.querySelector(".tileslot")!.replaceWith(monogram(nameOf(i)));
   row.onclick = async (ev) => {
     if ((ev.target as HTMLElement).closest("button, .m-switch")) return;
     await copy((await totp(i.data.otp)).code, `${nameOf(i)}: code copied`);
   };
-  row.querySelector<HTMLElement>("[data-del]")!.onclick = async () => {
-    if (!confirm(`Remove ${nameOf(i)}? Make sure you can still sign in to it another way.`)) return;
-    vault!.remove(i.id);
-    await save();
-    renderList();
-  };
+  row.querySelector<HTMLElement>("[data-menu]")!.onclick = (e) => { e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); rowMenu(i, r.left, r.bottom + 4); };
+  row.oncontextmenu = (e) => { e.preventDefault(); rowMenu(i, e.clientX, e.clientY); };
   row.querySelector<HTMLElement>("[data-xl]")?.addEventListener("click", () => sendOnce(i.data.otp));
   row.querySelector<HTMLElement>("[data-auto]")?.addEventListener("click", (e) => {
     autoXl = !autoXl;

@@ -67,3 +67,17 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .pw { display: flex; gap: 8px; align-items: center; }
 .pw .grow { flex: 1; }
 .modal .content select.m-field { width: 100%; cursor: pointer; }
+
+/* per-entry icon tile */
+.who { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.who .txt { min-width: 0; }
+.who .txt b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile { flex: none; width: 34px; height: 34px; display: grid; place-items: center; font: 700 14px var(--mono); letter-spacing: 0; user-select: none; }
+.pin { color: var(--gold); font-size: 11px; }
+
+/* right-click / ⋯ menu */
+.menu-backdrop { position: fixed; inset: 0; z-index: 30; }
+.menu-backdrop .m-menu { position: fixed; }
+.m-menu .r { cursor: pointer; user-select: none; gap: 18px; }
+.m-menu .r .mi { display: inline-block; width: 16px; text-align: center; color: var(--muted); }
+.m-menu .r.danger .mi { color: inherit; }

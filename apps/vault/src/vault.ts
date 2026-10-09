@@ -7,7 +7,7 @@ import {
 import type { OtpEntry } from "@marobotic/otp";
 
 export type TotpItem = { type: "totp"; otp: OtpEntry; label?: string; notes?: string; favorite?: boolean };
-export type LoginItem = { type: "login"; name: string; urls: string[]; username: string; password: string; totpId?: string; notes?: string };
+export type LoginItem = { type: "login"; name: string; urls: string[]; username: string; password: string; totpId?: string; notes?: string; favorite?: boolean };
 export type PasskeyItem = { type: "passkey"; rpId: string; credentialId: string; userHandle: string; username: string; privateKeyPkcs8: string; counter: number };
 export type NoteItem = { type: "note"; title: string; body: string };
 export type ItemData = TotpItem | LoginItem | PasskeyItem | NoteItem;
