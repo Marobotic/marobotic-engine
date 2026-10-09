@@ -1,0 +1,62 @@
+import { test, before } from "node:test";
+import assert from "node:assert/strict";
+import { init } from "@marobotic/crypto";
+import { parseOtpauth } from "@marobotic/otp";
+import { Vault, type VaultFile } from "../src/vault.ts";
+
+const FAST = { v: 1, alg: "argon2id13", ops: 1, memBytes: 8 * 1024 * 1024 } as const;
+const github = parseOtpauth("otpauth://totp/GitHub:mi%40marobotic.dev?secret=JBSWY3DPEHPK3PXP&issuer=GitHub");
+before(() => init());
+
+test("create, add, save, unlock: the saved file shows no secrets, only ids and times", () => {
+  const { vault, recoveryCode } = Vault.create("Mi@Marobotic.dev", "hunter2", { kdf: FAST });
+  assert.match(recoveryCode, /^([A-Z2-9]{4}-){12}[A-Z2-9]{4}$/);
+  const item = vault.add({ type: "totp", otp: github, label: "GitHub" });
+  vault.add({ type: "login", name: "Square Enix", urls: ["https://secure.square-enix.com"], username: "maro", password: "pa55word!" });
+  const file = vault.toFile();
+  const text = JSON.stringify(file);
+  for (const secret of ["JBSWY3DPEHPK3PXP", "GitHub", "pa55word!", "Square Enix", "totp", "login", "hunter2"]) assert.ok(!text.includes(secret), secret);
+  assert.equal(file.email, "mi@marobotic.dev");
+  const again = Vault.unlock(JSON.parse(text) as VaultFile, "hunter2");
+  assert.deepEqual(again.get(item.id)!.data, { type: "totp", otp: github, label: "GitHub" });
+  assert.equal(again.list("login").length, 1);
+  assert.throws(() => Vault.unlock(file, "hunter3"), /wrong password/);
+});
+
+test("a changed or swapped item is refused, not silently read", () => {
+  const { vault } = Vault.create("a@b.c", "pw", { kdf: FAST });
+  vault.add({ type: "note", title: "one", body: "1" });
+  vault.add({ type: "note", title: "two", body: "2" });
+  const file = vault.toFile();
+  const [a, b] = file.items;
+  const swapped = { ...file, items: [{ ...a!, box: b!.box }, b!] };
+  assert.throws(() => Vault.unlock(swapped, "pw"), /wrong key|changed/);
+});
+
+test("password reset: recovery kit opens the vault, setPassword seals it for the new password", () => {
+  const { vault, recoveryCode } = Vault.create("a@b.c", "old", { kdf: FAST });
+  vault.add({ type: "totp", otp: github });
+  const file = vault.toFile();
+  assert.throws(() => Vault.unlock(file, "new"), /wrong password/);
+  assert.throws(() => Vault.unlockWithRecovery(file, recoveryCode.replace(/^.{4}/, "AAAA")), /does not open/);
+  const recovered = Vault.unlockWithRecovery(file, recoveryCode.toLowerCase());
+  recovered.setPassword("new");
+  const after = Vault.unlock(recovered.toFile(), "new");
+  assert.equal(after.list("totp").length, 1);
+});
+
+test("two devices: newer edits win, deletions travel too", () => {
+  let t = 1000;
+  const clock = () => t++;
+  const { vault: phone } = Vault.create("a@b.c", "pw", { kdf: FAST, clock });
+  const it = phone.add({ type: "note", title: "wifi", body: "v1" });
+  const gone = phone.add({ type: "note", title: "old", body: "x" });
+  const pc = Vault.unlock(phone.toFile(), "pw", clock);
+  pc.update(it.id, { type: "note", title: "wifi", body: "v2 from pc" });
+  phone.remove(gone.id);
+  assert.equal(phone.merge(pc.toFile().items), 1);            // pc's newer edit lands on the phone
+  assert.equal(pc.merge(phone.toFile().items), 1);            // the phone's deletion lands on the pc
+  assert.deepEqual(phone.get(it.id)!.data, { type: "note", title: "wifi", body: "v2 from pc" });
+  assert.equal(pc.get(gone.id), undefined);
+  assert.equal(pc.merge(phone.toFile().items), 0);            // nothing new: nothing changes
+});

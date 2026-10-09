@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.log
+# secrets never live in the repo
+*.vault
+*.secret.json
