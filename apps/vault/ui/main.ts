@@ -16,7 +16,7 @@ import * as account from "./account.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 const app = $("#app");
-const LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];   // minutes; 0 = never
+const LOCK_CHOICES = [0, 5, 15, 30, 60, 240, 1440];   // minutes; 0 = never
 
 let vault: Vault | null = null;
 let file: VaultFile | null = null;      // the sealed copy on this PC (null before the first sign-in here)
@@ -259,6 +259,8 @@ function homeScreen() {
 }
 
 // ------------------------------------------------------------------ settings
+const lockLabel = (m: number) => (!m ? "Never" : m >= 1440 ? "After a day" : m >= 60 ? `After ${m / 60} hour${m === 60 ? "" : "s"}` : `After ${m} min`);
+
 function settingsModal() {
   const back = h(`
     <div class="backdrop">
@@ -270,8 +272,8 @@ function settingsModal() {
             <button class="m-btn compact" id="lockNow">Lock now</button>
           </div>
           <div class="set">
-            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use</span></div>
-            <select class="m-field" id="lockAfter">${LOCK_CHOICES.map((m) => `<option value="${m}" ${m === lockAfterMin ? "selected" : ""}>${m ? `After ${m} min` : "Never"}</option>`).join("")}</select>
+            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use. Closing the window keeps Vault open in the tray; Quit from the tray icon locks it.</span></div>
+            <select class="m-field" id="lockAfter">${LOCK_CHOICES.map((m) => `<option value="${m}" ${m === lockAfterMin ? "selected" : ""}>${lockLabel(m)}</option>`).join("")}</select>
           </div>
           <div class="set">
             <div><b>Recovery kit</b><span>The only way back into your vault if your account password is reset. Making a new one stops the old one working.</span></div>
@@ -291,7 +293,7 @@ function settingsModal() {
   $<HTMLSelectElement>("#lockAfter", back).onchange = (e) => {
     lockAfterMin = Number((e.target as HTMLSelectElement).value) || 0;
     localStorage.setItem("vault.lockAfterMin", String(lockAfterMin));
-    toast(lockAfterMin ? `Vault locks after ${lockAfterMin} min without use` : "Vault stays open until you lock it");
+    toast(lockAfterMin ? `Vault locks after ${lockLabel(lockAfterMin).replace("After ", "")} without use` : "Vault stays open until you quit or lock it");
   };
   $("#lockNow", back).onclick = () => { close(); signInScreen(); };
   $("#kit", back).onclick = async () => {
@@ -668,7 +670,7 @@ async function readQr(f: File): Promise<string | null> {
 // ------------------------------------------------------------------ start
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
 setInterval(() => {
-  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockAfterMin} min without use.`);
+  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`);
   else if (vault) tick();
 }, 1000);
 

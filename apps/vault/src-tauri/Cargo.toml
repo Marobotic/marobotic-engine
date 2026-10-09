@@ -1,6 +1,6 @@
 [package]
 name = "vault"
-version = "0.1.4"
+version = "0.1.5"
 description = "Vault: encrypted 2FA, passwords and passkeys"
 authors = ["Marobotic"]
 edition = "2021"
@@ -13,9 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 codegen-units = 1
