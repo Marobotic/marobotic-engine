@@ -1,0 +1,50 @@
+// ------------------------------------------------------------------ the vault: passwords and 2FA codes
+type TotpRow = Item & { data: TotpItem };
+type LoginRow = Item & { data: LoginItem };
+type Filter = "all" | "login" | "totp";
+
+const otps = () => (vault?.list("totp") ?? []) as TotpRow[];
+const logins = () => (vault?.list("login") ?? []) as LoginRow[];
+const groupCode = (c: string) => (c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c.length === 8 ? `${c.slice(0, 4)} ${c.slice(4)}` : c);
+const nameOf = (i: TotpRow) => i.data.label || i.data.otp.issuer || i.data.otp.account || "Untitled";
+let filter: Filter = (localStorage.getItem("vault.filter") as Filter) || "all";
+
+/** The 2FA code shown inside a login: the one it links to, if it still exists. */
+const codeFor = (l: LoginRow) => (l.data.totpId ? (vault!.get(l.data.totpId) as TotpRow | undefined) : undefined);
+
+let clearTimer = 0;
+async function copySecret(text: string, what: string) {
+  await navigator.clipboard.writeText(text);
+  toast(`${what} copied - cleared from the clipboard in 30 s`);
+  clearTimeout(clearTimer);
+  clearTimer = window.setTimeout(async () => {
+    try { if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText(""); } catch { /* can't read it: leave it */ }
+  }, 30_000);
+}
+
+function homeScreen() {
+  app.replaceChildren(h(`
+    <div class="top">
+      <div class="brand grow"><span class="logo"></span> Vault</div>
+      <button class="m-btn primary compact" id="add"> Add</button>
+      <button class="m-btn compact" id="lock" title="Lock"> Lock</button>
+      <button class="m-btn subtle compact" id="kit" title="Make a new recovery kit; the old one stops working"> Recovery kit</button>
+    </div>
+    <div class="m-sync sync-line" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
+    <div class="bar">
+      <input class="m-field search" id="q" placeholder="Search passwords and codes" value="${esc(query)}">
+      <div class="m-seg" id="filter">
+        <button data-f="all">All</button><button data-f="login">Passwords</button><button data-f="totp">2FA codes</button>
+      </div>
+    </div>
+    <div id="list"></div>`));
+  $("#add").onclick = () => addModal();
+  $("#lock").onclick = () => signInScreen();
+  $("#kit").onclick = async () => {
+    if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
+    const code = vault!.newRecoveryKit();
+    await save();
+    recoveryScreen(code, true);
+  };
+  $<HTMLInputElement>("#q").oninput = (e) => { query = (e.target as HTMLInputElement).value; renderList(); };
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#filter button

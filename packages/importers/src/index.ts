@@ -117,3 +117,5 @@ export function dedupe(r: ImportResult): ImportResult {
   const seen = new Set<string>();
   return { ...r, entries: r.entries.filter((e) => { const k = `${e.secret}|${e.issuer}|${e.account}`; if (seen.has(k)) return false; seen.add(k); return true; }) };
 }
+
+export * from "./passwords.ts";
