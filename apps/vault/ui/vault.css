@@ -1,6 +1,7 @@
 /* Vault's screens on the Marochy kit. */
 body { overflow-y: auto; }
-#app { max-width: 760px; margin: 0 auto; padding: 28px 24px 40px; }
+#app { max-width: 760px; margin: 0 auto; padding: 24px 24px 40px; }
+html, body { overflow-x: hidden; }
 .center { display: grid; place-items: center; min-height: 60vh; text-align: center; }
 
 .brand { display: flex; align-items: center; gap: 10px; font: 700 18px var(--mono); }
@@ -17,22 +18,22 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .kit { padding: 18px; background: var(--surface); border: 1px solid var(--border); font: 600 17px/1.7 var(--mono); letter-spacing: 1px; word-spacing: 6px; text-align: center; user-select: all; }
 .check { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
 
-/* codes */
-.top { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-.top .grow { flex: 1; }
-.search { width: 100%; margin-bottom: 14px; }
-.code-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 16px; padding: 12px 14px 10px; border: 1px solid var(--border); border-left-width: 3px; margin-bottom: 8px; background: var(--surface); cursor: pointer; transition: background-color 90ms var(--ease); }
+/* top bar */
+.top { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; min-width: 0; }
+.top .grow { flex: 1; min-width: 0; }
+.top .sync-line { margin: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 2FA rows: icon | account (big) + service (small) | code | ⋯, the countdown under them */
+.code-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px 12px; padding: 12px 8px 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--border); margin-bottom: 8px; background: var(--surface); cursor: pointer; transition: background-color 90ms var(--ease); }
+.code-row.ff { border-left-color: var(--gold); }
 .code-row:hover { background: var(--surface2); }
-.code-row .who b { display: block; font-size: 15px; }
-.code-row .who span { color: var(--muted); font-size: 12px; }
-.code-row .code { font: 700 26px var(--mono); letter-spacing: 3px; color: var(--fg); text-align: right; }
+.code-row .code { font: 700 26px var(--mono); letter-spacing: 3px; color: var(--fg); text-align: right; white-space: nowrap; }
 .code-row .code.low { color: color-mix(in srgb, var(--accent) 70%, white); }
-.code-row .m-level { grid-column: 1 / -1; height: 3px; }
+.code-row .code.copied, .mini .mono.copied { color: var(--teal); letter-spacing: 1px; }
+.code-row .m-level { grid-column: 1 / -1; height: 3px; margin-right: 6px; }
 .code-row .m-level > i { transition: width 1s linear; }
-.code-row .actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.code-row .actions .note { color: var(--faint); font-size: 12px; }
-.code-row .trash { opacity: 0; transition: opacity 90ms var(--ease); }
-.code-row:hover .trash { opacity: 1; }
+.code-row .actions { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.code-row .auto { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .empty { padding: 48px 0; text-align: center; color: var(--muted); display: grid; gap: 14px; justify-items: center; }
 
 /* modal */
@@ -47,19 +48,18 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
 .sync-line { margin: -8px 0 14px; font-size: 12px; }
 
-/* combined home: toolbar, filter, logins */
-.bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-.bar .grow { flex: 1; }
-.filter { margin-bottom: 14px; }
-.filter button { min-width: 110px; }
-.item.login { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 16px; padding: 11px 14px; border: 1px solid var(--border); border-left: 3px solid var(--teal); margin-bottom: 8px; background: var(--surface); transition: background-color 90ms var(--ease); }
+/* toolbar, filter, logins */
+.bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.bar .grow { flex: 1 1 220px; min-width: 0; }
+.filter { margin-bottom: 14px; display: flex; }
+.filter button { flex: 1; min-width: 0; }
+.item.login { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; padding: 11px 8px 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--teal); margin-bottom: 8px; background: var(--surface); transition: background-color 90ms var(--ease); }
 .item.login:hover { background: var(--surface2); }
-.item.login .who b { display: block; font-size: 15px; }
-.item.login .who span { color: var(--muted); font-size: 12px; }
+.item.login .tools { display: flex; gap: 2px; }
 .item.login .actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.item.login .actions .grow { flex: 1; }
-.mini { display: inline-flex; align-items: center; gap: 8px; padding: 2px 8px; border: 1px solid var(--border); background: var(--bg); }
-.mini .mono { font: 700 15px var(--mono); letter-spacing: 2px; }
+.mini { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; font: inherit; }
+.mini:hover { border-color: var(--fg); }
+.mini .mono { font: 700 15px var(--mono); letter-spacing: 2px; min-width: 7ch; text-align: left; }
 .mini .mono.low { color: color-mix(in srgb, var(--accent) 70%, white); }
 .mini-bar { width: 42px; height: 3px; }
 
@@ -68,12 +68,22 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .pw .grow { flex: 1; }
 .modal .content select.m-field { width: 100%; cursor: pointer; }
 
-/* per-entry icon tile */
-.who { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.who .txt { min-width: 0; }
-.who .txt b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tile { flex: none; width: 34px; height: 34px; display: grid; place-items: center; font: 700 14px var(--mono); letter-spacing: 0; user-select: none; }
+/* per-entry icon: the site's favicon, or initials until one loads */
+.txt { min-width: 0; }
+.txt b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.txt span { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile { flex: none; width: 36px; height: 36px; display: grid; place-items: center; font: 700 14px var(--mono); letter-spacing: 0; user-select: none; }
+.tile.icon { background: color-mix(in srgb, var(--fg) 92%, var(--bg)); padding: 6px; }
+.tile.icon img { width: 24px; height: 24px; object-fit: contain; display: block; }
 .pin { color: var(--gold); font-size: 11px; }
+
+/* settings */
+.settings .set { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.settings .set:first-child { border-top: 0; padding-top: 4px; }
+.settings .set > div { flex: 1; min-width: 0; }
+.settings .set b { display: block; font-size: 14px; }
+.settings .set span { display: block; color: var(--muted); font: 12px/1.45 var(--sans); overflow-wrap: anywhere; }
+.settings .set select.m-field { width: auto; min-width: 150px; cursor: pointer; }
 
 /* right-click / ⋯ menu */
 .menu-backdrop { position: fixed; inset: 0; z-index: 30; }
@@ -81,3 +91,21 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .m-menu .r { cursor: pointer; user-select: none; gap: 18px; }
 .m-menu .r .mi { display: inline-block; width: 16px; text-align: center; color: var(--muted); }
 .m-menu .r.danger .mi { color: inherit; }
+
+/* narrow windows and phones */
+@media (max-width: 560px) {
+  #app { padding: 14px 12px 28px; }
+  .top { gap: 10px; margin-bottom: 14px; }
+  .top #settings .lbl { display: none; }
+  .bar .grow { flex-basis: 100%; }
+  .bar .m-btn { flex: 1; }
+  .code-row, .item.login { gap: 6px 10px; padding: 10px 4px 9px 10px; }
+  .code-row .code { font-size: 21px; letter-spacing: 1.5px; }
+  .tile { width: 32px; height: 32px; font-size: 12px; }
+  .tile.icon { padding: 5px; }
+  .tile.icon img { width: 22px; height: 22px; }
+  .txt b { font-size: 14px; }
+  .gate { margin-top: 6vh; }
+  .settings .set { flex-wrap: wrap; }
+  .modal .content { padding: 10px 14px 16px; }
+}

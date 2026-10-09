@@ -5,10 +5,9 @@ import { totp, type OtpEntry } from "@marobotic/otp";
 
 export const XL_PORT = 4646;
 
-/** The Square Enix account among the 2FA entries, if there is exactly one obvious choice. */
-export function findFfxivEntry(entries: OtpEntry[]): OtpEntry | undefined {
-  const hits = entries.filter((e) => /square\s*-?\s*enix|ffxiv|final\s*fantasy/i.test(`${e.issuer} ${e.account}`));
-  return hits.length === 1 ? hits[0] : hits.find((e) => /square\s*-?\s*enix/i.test(e.issuer));
+/** Every Square Enix account among the 2FA entries (one per FFXIV account). */
+export function ffxivEntries<T extends OtpEntry>(entries: T[]): T[] {
+  return entries.filter((e) => /square\s*-?\s*enix|ffxiv|final\s*fantasy/i.test(`${e.issuer} ${e.account}`));
 }
 
 /** One attempt: true when XIVLauncher took the code. `host` is the PC running it (the phone sends over Wi-Fi). */

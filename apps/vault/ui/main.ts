@@ -4,9 +4,10 @@ import { init, KDF_V1 } from "@marobotic/crypto";
 import { totp, normalizeEntry, type OtpEntry } from "@marobotic/otp";
 import { importText, importPasswordCsv, type ImportResult } from "@marobotic/importers";
 import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem } from "../src/vault.ts";
-import { findFfxivEntry, sendWhenAsked } from "../src/xivlauncher.ts";
+import { ffxivEntries, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
-import { monogram, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
+import { siteOf } from "../src/icons.ts";
+import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
 const jsQR = ((jsQRModule as unknown as { default?: unknown }).default ?? jsQRModule) as unknown as typeof import("jsqr").default;
@@ -15,7 +16,7 @@ import * as account from "./account.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 const app = $("#app");
-const LOCK_AFTER_MS = 10 * 60_000;
+const LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];   // minutes; 0 = never
 
 let vault: Vault | null = null;
 let file: VaultFile | null = null;      // the sealed copy on this PC (null before the first sign-in here)
@@ -24,9 +25,11 @@ let rev = 0;                            // the server version this vault is base
 let syncing: Promise<void> | null = null;
 let query = "";
 let lastActive = Date.now();
-let autoXl = localStorage.getItem("vault.autoXl") === "1";
+let lockAfterMin = Number(localStorage.getItem("vault.lockAfterMin")) || 0;   // off unless chosen in Settings
+let autoXlId = localStorage.getItem("vault.autoXlId") || "";                 // the one FFXIV account auto-sent
 let xlRun: AbortController | null = null;
-let filter: "all" | "login" | "totp" = "all";
+let filter: "totp" | "login" = "totp";
+const copiedUntil = new Map<string, number>();                                // row id -> when "Copied" goes back to the code
 
 function h(html: string): DocumentFragment {
   const t = document.createElement("template");
@@ -215,40 +218,34 @@ function codeFor(login: LoginItem): OtpEntry | undefined {
   return matchTotp(login, otps().map((i) => i.data))?.otp;
 }
 
-async function copy(text: string, said: string, clearAfter = 0) {
-  await navigator.clipboard.writeText(text);
+async function copy(text: string, said: string, clearAfter = 0): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); } catch { toast("Couldn't copy - the clipboard is busy, try again"); return false; }
   toast(said);
   if (clearAfter) setTimeout(async () => { try { if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText(""); } catch { /* clipboard not readable: leave it */ } }, clearAfter);
+  return true;
 }
 
 function homeScreen() {
   app.replaceChildren(h(`
     <div class="top">
-      <div class="brand grow"><span class="logo"></span> Vault</div>
-      <button class="m-btn compact" id="lock" title="Lock"> Lock</button>
-      <button class="m-btn subtle compact" id="kit" title="Make a new recovery kit; the old one stops working"> Recovery kit</button>
+      <div class="brand"><span class="logo"></span> Vault</div>
+      <div class="m-sync sync-line grow" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
+      <button class="m-btn subtle compact" id="settings" title="Settings">&#xf013;<span class="lbl"> Settings</span></button>
     </div>
-    <div class="m-sync sync-line" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
     <div class="bar">
       <input class="m-field grow" id="q" placeholder="Search" value="${esc(query)}">
-      <button class="m-btn primary compact" id="newLogin"> Login</button>
-      <button class="m-btn compact" id="newCode"> 2FA</button>
+      <button class="m-btn ${filter === "totp" ? "primary " : ""}compact" id="newCode"> 2FA</button>
+      <button class="m-btn ${filter === "login" ? "primary " : ""}compact" id="newLogin"> Login</button>
       <button class="m-btn compact" id="import"> Import</button>
     </div>
     <div class="m-seg filter" id="filter"></div>
     <div id="list"></div>`));
-  $("#lock").onclick = () => signInScreen();
-  $("#kit").onclick = async () => {
-    if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
-    const code = vault!.newRecoveryKit();
-    await save();
-    recoveryScreen(code, true);
-  };
+  $("#settings").onclick = () => settingsModal();
   $("#newLogin").onclick = () => loginEditor(null);
   $("#newCode").onclick = () => addModal("codes");
   $("#import").onclick = () => addModal("import");
   const seg = $("#filter");
-  for (const [v, label] of [["all", "All"], ["login", "Passwords"], ["totp", "2FA codes"]] as const) {
+  for (const [v, label] of [["totp", "2FA codes"], ["login", "Passwords"]] as const) {
     const b = document.createElement("button");
     b.textContent = label;
     b.className = filter === v ? "on" : "";
@@ -257,8 +254,53 @@ function homeScreen() {
   }
   $<HTMLInputElement>("#q").oninput = (e) => { query = (e.target as HTMLInputElement).value; renderList(); };
   renderList();
-  if (autoXl) startAutoXl();
+  if (autoXlId) startAutoXl();
   if (session) void sync();
+}
+
+// ------------------------------------------------------------------ settings
+function settingsModal() {
+  const back = h(`
+    <div class="backdrop">
+      <div class="m-modal modal settings">
+        <header>Settings <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
+        <div class="content">
+          <div class="set">
+            <div><b>Account</b><span>${esc([file?.email || localStorage.getItem("vault.email") || "", session ? "" : "offline"].filter(Boolean).join(" · "))}</span></div>
+            <button class="m-btn compact" id="lockNow">Lock now</button>
+          </div>
+          <div class="set">
+            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use</span></div>
+            <select class="m-field" id="lockAfter">${LOCK_CHOICES.map((m) => `<option value="${m}" ${m === lockAfterMin ? "selected" : ""}>${m ? `After ${m} min` : "Never"}</option>`).join("")}</select>
+          </div>
+          <div class="set">
+            <div><b>Recovery kit</b><span>The only way back into your vault if your account password is reset. Making a new one stops the old one working.</span></div>
+            <button class="m-btn compact" id="kit">New kit</button>
+          </div>
+          <div class="set">
+            <div><b>Vault file on this device</b><span id="path"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>`).firstElementChild as HTMLElement;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
+  back.onclick = (e) => { if (e.target === back) close(); };
+  void platform.vaultPath().then((p) => ($("#path", back).textContent = p));
+  $<HTMLSelectElement>("#lockAfter", back).onchange = (e) => {
+    lockAfterMin = Number((e.target as HTMLSelectElement).value) || 0;
+    localStorage.setItem("vault.lockAfterMin", String(lockAfterMin));
+    toast(lockAfterMin ? `Vault locks after ${lockAfterMin} min without use` : "Vault stays open until you lock it");
+  };
+  $("#lockNow", back).onclick = () => { close(); signInScreen(); };
+  $("#kit", back).onclick = async () => {
+    if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
+    const code = vault!.newRecoveryKit();
+    await save();
+    close();
+    recoveryScreen(code, true);
+  };
 }
 
 const matchesQuery = (hay: string) => { const q = query.trim().toLowerCase(); return !q || hay.toLowerCase().includes(q); };
@@ -270,15 +312,16 @@ function renderList() {
   const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || a.data.name.localeCompare(b.data.name));
   const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
-  if (filter !== "totp") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
-  const ff = findFfxivEntry(ts.map((i) => i.data.otp));
-  if (filter !== "login") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) rows.push(codeRow(i, ff === i.data.otp));
+  if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
+  const ff = new Set(ffxivEntries(ts.map((i) => i.data.otp)));
+  if (filter === "totp") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) rows.push(codeRow(i, ff.has(i.data.otp)));
 
   if (!rows.length) {
-    const msg = ls.length || ts.length ? "Nothing matches your search." : "Your vault is empty.";
-    const hint = ls.length || ts.length ? "" : "Add a login, a 2FA code, or import from your browser or another app.";
+    const shown = filter === "totp" ? ts.length : ls.length;
+    const msg = shown ? "Nothing matches your search." : filter === "totp" ? "No 2FA codes yet." : "No passwords yet.";
+    const hint = shown ? "" : filter === "totp" ? "Scan a QR code, paste a setup key, or import from Google Authenticator." : "Add a login, or import passwords from your browser or another app.";
     list.replaceChildren(h(`<div class="empty"><div>${msg}</div>${hint ? `<div class="faint">${hint}</div>` : ""}
-      ${ls.length || ts.length ? "" : `<div class="row2" style="max-width:420px"><button class="m-btn primary" id="e1"> New login</button><button class="m-btn" id="e2"> Add 2FA</button></div>`}</div>`));
+      ${shown ? "" : filter === "totp" ? `<button class="m-btn primary" id="e2">&#xf023; Add 2FA</button>` : `<button class="m-btn primary" id="e1">&#xf084; New login</button>`}</div>`));
     $("#e1")?.addEventListener("click", () => loginEditor(null));
     $("#e2")?.addEventListener("click", () => addModal("codes"));
     return;
@@ -294,84 +337,107 @@ async function togglePin(i: LoginRow | TotpRow) {
   renderList();
 }
 
+/** Copy a 2FA code: the toast names the account, and the code itself reads "Copied" for 3 seconds. */
+async function copyCode(rowId: string, otp: OtpEntry, who: string) {
+  if (!(await copy((await totp(otp)).code, `Code copied · ${who}`))) return;
+  copiedUntil.set(rowId, Date.now() + 3000);
+  tick();
+  setTimeout(tick, 3050);
+}
+
 /** A row's menu, from a right-click point or next to its ⋯ button (copy, pin, edit, delete). */
 function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
-  const pin = { label: i.data.favorite ? "Unpin" : "Pin to top", icon: "", checked: !!i.data.favorite, onClick: () => void togglePin(i) };
+  const pin = { label: i.data.favorite ? "Unpin" : "Pin to top", icon: "&#xf08d;", checked: !!i.data.favorite, onClick: () => void togglePin(i) };
   const del = {
-    label: "Delete", icon: "", danger: true, onClick: async () => {
+    label: "Delete", icon: "&#xf1f8;", danger: true, onClick: async () => {
       const name = i.data.type === "login" ? i.data.name : nameOf(i as TotpRow);
       if (!confirm(`Delete ${name}? Make sure you can still sign in another way.`)) return;
       vault!.remove(i.id); await save(); renderList();
     },
   };
   if (i.data.type === "login") {
-    const d = i.data, linked = codeFor(d);
+    const d = i.data, linked = codeFor(d), who = d.username || d.name;
     const copies: MenuSection["items"] = [];
-    if (d.password) copies.push({ label: "Copy password", icon: "", onClick: () => void copy(d.password, `${d.name}: password copied (clears in 30s)`, 30_000) });
-    if (d.username) copies.push({ label: "Copy username", icon: "", onClick: () => void copy(d.username, `${d.name}: username copied`) });
-    if (linked) copies.push({ label: "Copy 2FA code", icon: "", onClick: async () => void copy((await totp(linked)).code, `${d.name}: 2FA code copied`) });
-    openMenu(x, y, [{ title: d.name, items: copies }, { items: [pin, { label: "Edit", icon: "", onClick: () => loginEditor(i as LoginRow) }] }, { items: [del] }]);
+    if (d.password) copies.push({ label: "Copy password", icon: "&#xf084;", onClick: () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000) });
+    if (d.username) copies.push({ label: "Copy username", icon: "&#xf007;", onClick: () => void copy(d.username, `Username copied · ${d.name}`) });
+    if (linked) copies.push({ label: "Copy 2FA code", icon: "&#xf023;", onClick: () => void copyCode(i.id, linked, who) });
+    openMenu(x, y, [{ title: d.name, items: copies }, { items: [pin, { label: "Edit", icon: "&#xf044;", onClick: () => loginEditor(i as LoginRow) }] }, { items: [del] }]);
   } else {
     const t = i as TotpRow;
-    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "", onClick: async () => void copy((await totp(t.data.otp)).code, `${nameOf(t)}: code copied`) }] }, { items: [pin] }, { items: [del] }]);
+    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] }, { items: [pin] }, { items: [del] }]);
   }
 }
+
+/** The two lines next to an icon: the account big, the service under it. */
+const whoLines = (big: string, small: string, pinned: boolean) =>
+  `<div class="txt"><b>${pinned ? '<span class="pin">&#xf08d;</span> ' : ""}${esc(big || small)}</b>${big && small ? `<span>${esc(small)}</span>` : ""}</div>`;
 
 function loginRow(i: LoginRow): HTMLElement {
   const d = i.data;
   const host = d.urls[0] ? hostOf(d.urls[0]) : "";
   const linked = codeFor(d);
+  const small = host && host !== d.name.toLowerCase() ? `${d.name} · ${host}` : d.name;
   const row = h(`
     <div class="item login" data-login="${i.id}">
-      <div class="who"><span class="tileslot"></span><div class="txt"><b>${d.favorite ? '<span class="pin"></span> ' : ""}${esc(d.name)}</b><span>${esc(d.username)}${host ? " · " + esc(host) : ""}</span></div></div>
+      <span class="tileslot"></span>
+      ${whoLines(d.username, small, !!d.favorite)}
+      <div class="tools">
+        <button class="m-btn subtle compact" data-edit title="Edit">&#xf044;</button>
+        <button class="m-btn subtle compact" data-menu title="More">&#xf142;</button>
+      </div>
       <div class="actions">
-        ${d.username ? `<button class="m-btn subtle compact" data-cuser> User</button>` : ""}
-        ${d.password ? `<button class="m-btn subtle compact" data-cpass> Password</button>` : ""}
-        ${linked ? `<span class="mini" title="2FA code"><span class="mono" data-code>······</span><span class="m-level mini-bar"><i data-bar></i></span><button class="m-btn subtle compact" data-ccode>Copy</button></span>` : ""}
-        <span class="grow"></span>
-        <button class="m-btn subtle compact" data-edit title="Edit"></button>
-        <button class="m-btn subtle compact" data-menu title="More"></button>
+        ${d.username ? `<button class="m-btn subtle compact" data-cuser>&#xf007; User</button>` : ""}
+        ${d.password ? `<button class="m-btn subtle compact" data-cpass>&#xf084; Password</button>` : ""}
+        ${linked ? `<button class="mini" title="Copy the 2FA code" data-ccode><span class="mono" data-code>······</span><span class="m-level mini-bar"><i data-bar></i></span></button>` : ""}
       </div>
     </div>`).firstElementChild as HTMLElement;
-  if (linked) row.dataset.code = "1"; // marks it for tick()
-  row.querySelector(".tileslot")!.replaceWith(monogram(d.name));
-  row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => void copy(d.username, `${d.name}: username copied`));
-  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => void copy(d.password, `${d.name}: password copied (clears in 30s)`, 30_000));
-  row.querySelector<HTMLElement>("[data-ccode]")?.addEventListener("click", async () => { if (linked) await copy((await totp(linked)).code, `${d.name}: 2FA code copied`); });
+  row.querySelector(".tileslot")!.replaceWith(entryIcon(d.name, siteOf({ urls: d.urls, name: d.name })));
+  const who = d.username || d.name;
+  row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => void copy(d.username, `Username copied · ${d.name}`));
+  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000));
+  row.querySelector<HTMLElement>("[data-ccode]")?.addEventListener("click", () => { if (linked) void copyCode(i.id, linked, who); });
   row.querySelector<HTMLElement>("[data-edit]")!.onclick = () => loginEditor(i);
   row.querySelector<HTMLElement>("[data-menu]")!.onclick = (e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); rowMenu(i, r.left, r.bottom + 4); };
   row.oncontextmenu = (e) => { e.preventDefault(); rowMenu(i, e.clientX, e.clientY); };
   return row;
 }
 
+/** The site a 2FA code belongs to: a linked login's address when there is one, else its service name. */
+function siteForCode(i: TotpRow): string {
+  const login = logins().find((l) => l.data.totpId === i.id) ?? logins().find((l) => !l.data.totpId && matchTotp(l.data, [i.data]));
+  return siteOf(login?.data.urls.length ? { urls: login.data.urls } : { issuer: i.data.otp.issuer, name: i.data.label });
+}
+
 function codeRow(i: TotpRow, isFf: boolean): HTMLElement {
+  const auto = isFf && autoXlId === i.id;
   const row = h(`
-    <div class="code-row" data-id="${i.id}" style="border-left-color:${isFf ? "var(--gold)" : "var(--border)"}">
-      <div class="who"><span class="tileslot"></span><div class="txt"><b>${i.data.favorite ? '<span class="pin"></span> ' : ""}${esc(nameOf(i))}</b><span>${esc(i.data.otp.account)}</span></div></div>
+    <div class="code-row ${isFf ? "ff" : ""}" data-id="${i.id}">
+      <span class="tileslot"></span>
+      ${whoLines(i.data.otp.account, nameOf(i), !!i.data.favorite)}
       <div class="code" data-code>······</div>
+      <button class="m-btn subtle compact menu" data-menu title="More">&#xf142;</button>
       <div class="m-level"><i data-bar></i></div>
-      <div class="actions">
-        ${isFf ? `<button class="m-btn compact" data-xl> Send to XIVLauncher</button>
-                  <span class="m-switch ${autoXl ? "on" : ""}" data-auto title="Send it by itself whenever XIVLauncher asks"></span>
-                  <span class="note">Auto-send when XIVLauncher asks</span>` : ""}
-        <span class="grow" style="flex:1"></span>
-        <button class="m-btn subtle compact" data-menu title="More"></button>
-      </div>
+      ${isFf ? `<div class="actions">
+        <button class="m-btn compact" data-xl>&#xf1d8; Send to XIVLauncher</button>
+        <label class="auto" title="Send this account's code by itself whenever XIVLauncher asks (one account at a time)"><span class="m-switch ${auto ? "on" : ""}" data-auto></span> Auto-send</label>
+      </div>` : ""}
     </div>`).firstElementChild as HTMLElement;
-  row.querySelector(".tileslot")!.replaceWith(monogram(nameOf(i)));
-  row.onclick = async (ev) => {
-    if ((ev.target as HTMLElement).closest("button, .m-switch")) return;
-    await copy((await totp(i.data.otp)).code, `${nameOf(i)}: code copied`);
+  row.querySelector(".tileslot")!.replaceWith(entryIcon(nameOf(i), siteForCode(i)));
+  row.onclick = (ev) => {
+    if ((ev.target as HTMLElement).closest("button, .auto")) return;
+    void copyCode(i.id, i.data.otp, i.data.otp.account || nameOf(i));
   };
   row.querySelector<HTMLElement>("[data-menu]")!.onclick = (e) => { e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); rowMenu(i, r.left, r.bottom + 4); };
   row.oncontextmenu = (e) => { e.preventDefault(); rowMenu(i, e.clientX, e.clientY); };
-  row.querySelector<HTMLElement>("[data-xl]")?.addEventListener("click", () => sendOnce(i.data.otp));
-  row.querySelector<HTMLElement>("[data-auto]")?.addEventListener("click", (e) => {
-    autoXl = !autoXl;
-    localStorage.setItem("vault.autoXl", autoXl ? "1" : "0");
-    (e.target as HTMLElement).classList.toggle("on", autoXl);
-    autoXl ? startAutoXl() : stopAutoXl();
-    toast(autoXl ? "Vault will send your FFXIV code whenever XIVLauncher asks" : "Auto-send is off");
+  row.querySelector<HTMLElement>("[data-xl]")?.addEventListener("click", () => sendOnce(i.data.otp, i.data.otp.account || nameOf(i)));
+  row.querySelector<HTMLElement>(".auto")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    autoXlId = autoXlId === i.id ? "" : i.id;
+    localStorage.setItem("vault.autoXlId", autoXlId);
+    document.querySelectorAll<HTMLElement>(".code-row [data-auto]").forEach((s) => s.classList.toggle("on", s.closest<HTMLElement>(".code-row")!.dataset.id === autoXlId));
+    stopAutoXl();
+    if (autoXlId) startAutoXl();
+    toast(autoXlId ? `Auto-send on for ${i.data.otp.account || nameOf(i)}` : "Auto-send is off");
   });
   return row;
 }
@@ -381,20 +447,21 @@ async function tick() {
   for (const row of document.querySelectorAll<HTMLElement>(".code-row")) {
     const item = vault?.get(row.dataset.id!);
     if (!item || item.data.type !== "totp") continue;
-    paintCode(row, await totp(item.data.otp, now), item.data.otp.period);
+    paintCode(row, await totp(item.data.otp, now), item.data.otp.period, (copiedUntil.get(row.dataset.id!) ?? 0) > now);
   }
   for (const row of document.querySelectorAll<HTMLElement>(".login[data-login]")) {
     const item = vault?.get(row.dataset.login!);
     if (!item || item.data.type !== "login") continue;
     const otp = codeFor(item.data);
-    if (otp) paintCode(row, await totp(otp, now), otp.period);
+    if (otp) paintCode(row, await totp(otp, now), otp.period, (copiedUntil.get(row.dataset.login!) ?? 0) > now);
   }
 }
-function paintCode(row: HTMLElement, r: { code: string; remaining: number }, period: number) {
+function paintCode(row: HTMLElement, r: { code: string; remaining: number }, period: number, copied: boolean) {
   const el = row.querySelector<HTMLElement>("[data-code]");
   if (!el) return;
-  el.textContent = groupCode(r.code);
-  el.classList.toggle("low", r.remaining <= 5);
+  el.textContent = copied ? "Copied" : groupCode(r.code);
+  el.classList.toggle("copied", copied);
+  el.classList.toggle("low", !copied && r.remaining <= 5);
   const bar = row.querySelector<HTMLElement>("[data-bar]");
   if (bar) { bar.style.setProperty("--v", `${(r.remaining / period) * 100}%`); bar.parentElement!.classList.toggle("full", r.remaining <= 5); }
 }
@@ -466,22 +533,27 @@ function loginEditor(existing: LoginRow | null) {
 }
 
 // ------------------------------------------------------------------ XIVLauncher
-async function sendOnce(entry: OtpEntry) {
+/** Send one account's code now. Auto-send (maybe for another account) pauses meanwhile so the two never race. */
+async function sendOnce(entry: OtpEntry, who: string) {
   if (!platform.inApp) return toast("Sending to XIVLauncher works in the Vault app, not in a browser");
-  toast("Waiting for XIVLauncher's OTP box…");
+  stopAutoXl();
+  toast(`Waiting for XIVLauncher's OTP box (${who})…`);
   const r = await sendWhenAsked(entry, { untilMs: 60_000, send: platform.xlSend });
-  toast(r.sent ? "Code sent to XIVLauncher" : "XIVLauncher didn't ask within a minute - is its OTP box open, with app support on?");
+  toast(r.sent ? `Code sent to XIVLauncher · ${who}` : "XIVLauncher didn't ask within a minute - is its OTP box open, with app support on?");
+  if (autoXlId) startAutoXl();
 }
 
+/** Auto-send: whenever XIVLauncher asks, it gets the code of the one account chosen for it. */
 function startAutoXl() {
   if (xlRun || !platform.inApp || !vault) return;
   const run = (xlRun = new AbortController());
   (async () => {
     while (!run.signal.aborted && vault) {
-      const entry = findFfxivEntry(otps().map((i) => i.data.otp));
-      if (!entry) break;
-      const r = await sendWhenAsked(entry, { untilMs: 60 * 60_000, everyMs: 1500, send: platform.xlSend, signal: run.signal });
-      if (r.sent) { toast("FFXIV code sent to XIVLauncher"); await new Promise((ok) => setTimeout(ok, 45_000)); }
+      const item = vault.get(autoXlId);
+      if (!item || item.data.type !== "totp") break;
+      const who = item.data.otp.account || nameOf(item as TotpRow);
+      const r = await sendWhenAsked(item.data.otp, { untilMs: 60 * 60_000, everyMs: 1500, send: platform.xlSend, signal: run.signal });
+      if (r.sent) { toast(`FFXIV code sent to XIVLauncher · ${who}`); await new Promise((ok) => setTimeout(ok, 45_000)); }
     }
   })();
 }
@@ -596,7 +668,7 @@ async function readQr(f: File): Promise<string | null> {
 // ------------------------------------------------------------------ start
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
 setInterval(() => {
-  if (vault && Date.now() - lastActive > LOCK_AFTER_MS) signInScreen("Locked after 10 minutes without use.");
+  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockAfterMin} min without use.`);
   else if (vault) tick();
 }, 1000);
 
@@ -610,6 +682,8 @@ setInterval(() => {
     vault.add({ type: "login", name: "Square Enix", urls: ["https://secure.square-enix.com"], username: "maro", password: "demo-pw-9", notes: "" });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "GitHub", account: "mi@marobotic.dev", secret: "JBSWY3DPEHPK3PXP" }) });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro", secret: "GEZDGNBVGY3TQOJQ" }) });
+    vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro-alt", secret: "MFRGGZDFMZTWQ2LK" }) });
+    vault.add({ type: "totp", otp: normalizeEntry({ issuer: "DigitalOcean", account: "someone.with.a.long.address@example.com", secret: "KRSXG5CTMVRXEZLU" }) });
     return homeScreen();
   }
   const text = await platform.loadVault();

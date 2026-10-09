@@ -10,6 +10,7 @@ import { createVaultServer } from "../server/server.ts";
 // A stand-in for maro-cache: two accounts, sessions "s-mi" and "s-other".
 const accounts: Record<string, string> = { "s-mi": "mi@marobotic.dev", "s-other": "friend@example.com" };
 let account: Server, vault: Server, base = "", dir = "";
+const iconAsks: string[] = [];
 
 before(async () => {
   account = createServer((req, res) => {
@@ -29,7 +30,11 @@ before(async () => {
   });
   await new Promise<void>((ok) => account.listen(0, "127.0.0.1", ok));
   dir = mkdtempSync(join(tmpdir(), "vault-server-"));
-  vault = createVaultServer({ dataDir: dir, accountUrl: `http://127.0.0.1:${(account.address() as AddressInfo).port}` });
+  vault = createVaultServer({
+    dataDir: dir,
+    accountUrl: `http://127.0.0.1:${(account.address() as AddressInfo).port}`,
+    iconSource: async (d) => (iconAsks.push(d), d === "github.com" ? { type: "image/png", body: Buffer.from("PNGDATA") } : null),
+  });
   await new Promise<void>((ok) => vault.listen(0, "127.0.0.1", ok));
   base = `http://127.0.0.1:${(vault.address() as AddressInfo).port}`;
 });
@@ -79,4 +84,17 @@ test("the app's own window may call it; other web pages may not", async () => {
   assert.equal(app.headers.get("access-control-allow-origin"), "http://tauri.localhost");
   const page = await call("GET", "/health", undefined, undefined, "https://evil.example");
   assert.equal(page.headers.get("access-control-allow-origin"), null);
+});
+
+test("favicons: fetched once, cached, a site without one is a 404, junk is refused", async () => {
+  for (let i = 0; i < 2; i++) {
+    const r = await fetch(`${base}/icon/github.com`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("content-type"), "image/png");
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString(), "PNGDATA");
+  }
+  assert.equal((await fetch(`${base}/icon/nothing-here.com`)).status, 404);
+  assert.equal((await fetch(`${base}/icon/nothing-here.com`)).status, 404);
+  assert.deepEqual(iconAsks, ["github.com", "nothing-here.com"]);          // each asked upstream only once
+  for (const bad of ["localhost", "..%2Fetc", "127.0.0.1", "a_b.com"]) assert.equal((await fetch(`${base}/icon/${bad}`)).status, 400, bad);
 });

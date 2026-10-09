@@ -1,8 +1,9 @@
 // Shared bits of Vault's window: the per-entry icon tile and the right-click menu, both on the
 // Marochy palette so every engine app can reuse them.
 
-// A password manager must not phone a third party to fetch a logo (that would leak which services
-// you use), so each entry gets an offline monogram tile: initials on a colour picked from the name.
+// Each entry shows its website's favicon. Icons come through Vault's own server (marobotic.dev/vault/icon),
+// never straight from a third party, and the initials tile stands in until one loads, offline, or for a
+// site that has none.
 const PALETTE = ["#B14242", "#D66E36", "#F0BE66", "#4A8B8B", "#7E6BAF", "#5B8C4A", "#C2587E", "#8A8A8A"];
 
 export function monogramColor(name: string): string {
@@ -31,6 +32,27 @@ export function monogram(name: string): HTMLElement {
   tile.style.background = bg;
   tile.style.color = inkFor(bg);
   tile.textContent = initials(name);
+  return tile;
+}
+
+const ICONS = "https://marobotic.dev/vault/icon/";
+
+/** The site's favicon on a light-neutral tile, with the initials tile until (unless) it loads. */
+export function entryIcon(name: string, site: string): HTMLElement {
+  const tile = monogram(name);
+  if (!site) return tile;
+  const img = new Image();
+  img.alt = "";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.onload = () => {
+    if (img.naturalWidth < 8) return;              // a 1px placeholder is no icon
+    tile.className = "tile icon";
+    tile.style.background = "";
+    tile.textContent = "";
+    tile.append(img);
+  };
+  img.src = ICONS + encodeURIComponent(site);
   return tile;
 }
 

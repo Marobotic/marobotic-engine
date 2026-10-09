@@ -7,13 +7,14 @@
 //   POST /auth/login|register|forgot|reset   -> maro-cache
 //   GET  /api/vault                          -> { rev, file } | 404 { none: true }
 //   PUT  /api/vault { base, file }           -> { rev } | 409 { rev, file } when another device saved first
+//   GET  /icon/<domain>                      -> the site's favicon (PNG/ICO), cached here, or 404
 //   GET  /health
 //
 // env VAULT_PORT (8950), VAULT_HOST (127.0.0.1), VAULT_DATA (/var/lib/marobotic-vault),
 //     MARO_ACCOUNT_URL (http://127.0.0.1:8900)
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, unlinkSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, unlinkSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -22,11 +23,51 @@ const KEEP_VERSIONS = 10;
 const ORIGINS = new Set(["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", "http://127.0.0.1:8960"]);
 
 type Stored = { rev: number; updated: number; file: unknown };
+type Icon = { type: string; body: Buffer } | null;
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-export function createVaultServer(opts: { dataDir: string; accountUrl: string }) {
-  const { dataDir, accountUrl } = opts;
+// Favicons come through here so the app only ever tells marobotic.dev which sites are in a vault, never
+// a third party from the user's own address. Google's service first (64px PNG, a real 404 when the site
+// has none), DuckDuckGo's as the fallback.
+export const DOMAIN = /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const ICON_MAX = 256 * 1024;
+const MISS_RETRY_MS = 7 * 24 * 3600_000;
+async function fetchIcon(domain: string): Promise<Icon> {
+  for (const url of [`https://www.google.com/s2/favicons?domain=${domain}&sz=64`, `https://icons.duckduckgo.com/ip3/${domain}.ico`]) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000), redirect: "follow" });
+      const type = r.headers.get("content-type") ?? "";
+      if (!r.ok || !type.startsWith("image/")) continue;
+      const body = Buffer.from(await r.arrayBuffer());
+      if (body.length && body.length <= ICON_MAX) return { type, body };
+    } catch { /* try the next one */ }
+  }
+  return null;
+}
+
+export function createVaultServer(opts: { dataDir: string; accountUrl: string; iconSource?: (domain: string) => Promise<Icon> }) {
+  const { dataDir, accountUrl, iconSource = fetchIcon } = opts;
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const iconDir = join(dataDir, "icons");
+  mkdirSync(iconDir, { recursive: true });
+  const iconsInFlight = new Map<string, Promise<Icon>>();
+
+  /** A site's icon from the cache here, fetched once when missing; a site without one is asked again after a week. */
+  async function icon(domain: string): Promise<Icon> {
+    const file = join(iconDir, domain), miss = `${file}.miss`;
+    try { const [type, b64] = readFileSync(file, "utf8").split("\n"); return { type: type!, body: Buffer.from(b64!, "base64") }; } catch { /* not cached */ }
+    try { if (Date.now() - statSync(miss).mtimeMs < MISS_RETRY_MS) return null; } catch { /* never missed */ }
+    let p = iconsInFlight.get(domain);
+    if (!p) {
+      p = iconSource(domain).then((got) => {
+        if (got) writeFileSync(file, `${got.type}\n${got.body.toString("base64")}`);
+        else writeFileSync(miss, "");
+        return got;
+      }).finally(() => iconsInFlight.delete(domain));
+      iconsInFlight.set(domain, p);
+    }
+    return p;
+  }
   const sessions = new Map<string, { email: string | null; until: number }>();
 
   const pathOf = (email: string) => join(dataDir, `${sha(email)}.json`);
@@ -90,6 +131,16 @@ export function createVaultServer(opts: { dataDir: string; accountUrl: string })
     try {
       if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
       if (path === "/health") return send(200, { ok: true });
+
+      const ic = /^\/icon\/([^/]+)$/.exec(path);
+      if (ic && req.method === "GET") {
+        const domain = decodeURIComponent(ic[1]!).toLowerCase();
+        if (!DOMAIN.test(domain)) return send(400, { error: "not a domain" });
+        const got = await icon(domain);
+        if (!got) { res.writeHead(404, { "cache-control": "public, max-age=86400" }); return res.end(); }
+        res.writeHead(200, { "content-type": got.type, "cache-control": "public, max-age=604800", "x-content-type-options": "nosniff" });
+        return res.end(got.body);
+      }
 
       const auth = /^\/auth\/(login|register|forgot|reset)$/.exec(path);
       if (auth && req.method === "POST") {

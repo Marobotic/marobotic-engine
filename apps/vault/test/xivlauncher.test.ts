@@ -2,14 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { parseOtpauth, totp } from "@marobotic/otp";
-import { findFfxivEntry, sendWhenAsked, sendCode, XL_PORT } from "../src/xivlauncher.ts";
+import { ffxivEntries, sendWhenAsked, sendCode, XL_PORT } from "../src/xivlauncher.ts";
 
 const se = parseOtpauth("otpauth://totp/Square%20Enix:maro?secret=JBSWY3DPEHPK3PXP&issuer=Square%20Enix");
+const se2 = parseOtpauth("otpauth://totp/SQUARE%20ENIX:alt?secret=GEZDGNBVGY3TQOJQ&issuer=SQUARE%20ENIX");
 const gh = parseOtpauth("otpauth://totp/GitHub:mi?secret=GEZDGNBVGY3TQOJQ&issuer=GitHub");
 
-test("finds the Square Enix account among the others", () => {
-  assert.equal(findFfxivEntry([gh, se]), se);
-  assert.equal(findFfxivEntry([gh]), undefined);
+test("finds every Square Enix account among the others", () => {
+  assert.deepEqual(ffxivEntries([gh, se, se2]), [se, se2]);
+  assert.deepEqual(ffxivEntries([gh]), []);
 });
 
 // A stand-in for XIVLauncher: like the real one it only listens once its OTP box is "open".
