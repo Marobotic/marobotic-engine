@@ -1,0 +1,43 @@
+# Builds Vault's iPhone app. iOS can only be built on macOS, so this runs in CI; the .ipa is
+# unsigned (signed on install with a free Apple ID, like the other marobotic apps - see mdeploy).
+name: Vault iOS
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/vault/**", "packages/**", ".github/workflows/vault-ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Rust + iOS targets
+        run: |
+          rustup target add aarch64-apple-ios
+      - name: Install deps
+        run: npm install
+      - name: Build the web UI
+        run: node apps/vault/build.mjs
+      - name: Init and build the iOS app (unsigned)
+        working-directory: apps/vault
+        run: |
+          npx tauri ios init
+          npx tauri ios build --export-method debugging --no-sign || true
+          # Fall back to a plain unsigned xcodebuild so we always get a .app to zip
+          APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 4 2>/dev/null | head -1)
+          if [ -z "$APP" ]; then
+            xcodebuild -project src-tauri/gen/apple/vault.xcodeproj -scheme vault_iOS \
+              -configuration release -sdk iphoneos -destination 'generic/platform=iOS' \
+              -derivedDataPath src-tauri/gen/apple/build \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+            APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 6 | head -1)
+          fi
+          echo "APP=$APP"
+          mkdir -p Payload && cp -R "$APP" Payload/ && zip -qr Vault.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: Vault-ipa, path: apps/vault/Vault.ipa }
