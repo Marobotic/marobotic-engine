@@ -25,14 +25,18 @@ export async function sendCode(code: string, host = "127.0.0.1", timeoutMs = 150
  *  `freshSeconds` left is skipped for the next one, so the launcher never gets one that expires mid-login. */
 export async function sendWhenAsked(
   entry: OtpEntry,
-  opts: { host?: string; untilMs?: number; everyMs?: number; freshSeconds?: number; now?: () => number; signal?: AbortSignal } = {},
+  opts: {
+    host?: string; untilMs?: number; everyMs?: number; freshSeconds?: number; now?: () => number; signal?: AbortSignal;
+    /** How one attempt goes out. The desktop app sends from its native side: a web page can't read the reply. */
+    send?: (code: string, host: string) => Promise<boolean>;
+  } = {},
 ): Promise<{ sent: boolean; code?: string }> {
   const now = opts.now ?? Date.now;
   const until = now() + (opts.untilMs ?? 5 * 60_000);
   while (now() < until && !opts.signal?.aborted) {
     let { code, remaining } = await totp(entry, now());
     if (remaining < (opts.freshSeconds ?? 3)) ({ code } = await totp(entry, now() + remaining * 1000));
-    if (await sendCode(code, opts.host)) return { sent: true, code };
+    if (await (opts.send ?? sendCode)(code, opts.host ?? "127.0.0.1")) return { sent: true, code };
     await new Promise((r) => setTimeout(r, opts.everyMs ?? 1000));
   }
   return { sent: false };

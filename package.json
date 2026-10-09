@@ -3,13 +3,17 @@
   "private": true,
   "description": "One engine for every marobotic app: TypeScript logic and UI, Tauri 2 shell, Marochy theme.",
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.24.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

@@ -8,7 +8,8 @@
     "skipLibCheck": true,
     "lib": [
       "ES2022",
-      "DOM"
+      "DOM",
+      "DOM.Iterable"
     ],
     "types": [
       "node"
@@ -19,6 +20,7 @@
   "include": [
     "apps/*/src/**/*.ts",
     "apps/*/test/**/*.ts",
+    "apps/*/ui/**/*.ts",
     "packages/*/src/**/*.d.ts",
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts"

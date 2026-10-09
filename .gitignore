@@ -4,3 +4,5 @@ dist/
 # secrets never live in the repo
 *.vault
 *.secret.json
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/

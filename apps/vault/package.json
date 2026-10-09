@@ -1,2 +1,23 @@
-{ "name": "@marobotic/vault", "version": "0.1.0", "private": true, "type": "module", "main": "src/index.ts", "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@marobotic/crypto": "*", "@marobotic/otp": "*" } }
+{
+  "name": "@marobotic/vault",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@marobotic/crypto": "*",
+    "@marobotic/otp": "*",
+    "jsqr": "^1.4.0"
+  },
+  "scripts": {
+    "build:ui": "node build.mjs",
+    "tauri": "tauri",
+    "app": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
+  }
+}

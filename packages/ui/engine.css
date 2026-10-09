@@ -1,0 +1,9 @@
+/* What every engine app adds to the Marochy kit. The font ships with the app (Latin + the Font Awesome
+   range, OFL): a visitor or a fresh PC won't have it installed, and Chrome on Windows didn't see the
+   installed copy either. */
+@font-face { font-family: "Marochy Mono"; font-weight: 400; font-display: swap; src: url(fonts/JetBrainsMonoNerdFont-Regular.woff2) format("woff2"); }
+@font-face { font-family: "Marochy Mono"; font-weight: 600 800; font-display: swap; src: url(fonts/JetBrainsMonoNerdFont-Bold.woff2) format("woff2"); }
+:root { --mono: "Marochy Mono", "JetBrainsMono Nerd Font", ui-monospace, monospace; }
+html, body { height: 100%; }
+[hidden] { display: none !important; }   /* .m-btn's display would otherwise beat the hidden attribute */
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

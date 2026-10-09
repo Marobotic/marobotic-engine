@@ -1,0 +1,47 @@
+/* Vault's screens on the Marochy kit. */
+body { overflow-y: auto; }
+#app { max-width: 760px; margin: 0 auto; padding: 28px 24px 40px; }
+.center { display: grid; place-items: center; min-height: 60vh; text-align: center; }
+
+.brand { display: flex; align-items: center; gap: 10px; font: 700 18px var(--mono); }
+.brand .logo { color: var(--accent); font-size: 20px; }
+
+/* setup / unlock */
+.gate { max-width: 420px; margin: 12vh auto 0; display: grid; gap: 14px; }
+.gate h1 { margin: 6px 0 0; font: 600 20px var(--mono); }
+.gate p { margin: 0; color: var(--muted); font: 14px/1.5 var(--sans); }
+.gate .m-field, .modal .m-field, .modal textarea { width: 100%; }
+.gate .err { color: color-mix(in srgb, var(--accent) 60%, white); font-size: 13px; min-height: 18px; }
+label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2px; text-transform: uppercase; }
+
+.kit { padding: 18px; background: var(--surface); border: 1px solid var(--border); font: 600 17px/1.7 var(--mono); letter-spacing: 1px; word-spacing: 6px; text-align: center; user-select: all; }
+.check { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
+
+/* codes */
+.top { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.top .grow { flex: 1; }
+.search { width: 100%; margin-bottom: 14px; }
+.code-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 16px; padding: 12px 14px 10px; border: 1px solid var(--border); border-left-width: 3px; margin-bottom: 8px; background: var(--surface); cursor: pointer; transition: background-color 90ms var(--ease); }
+.code-row:hover { background: var(--surface2); }
+.code-row .who b { display: block; font-size: 15px; }
+.code-row .who span { color: var(--muted); font-size: 12px; }
+.code-row .code { font: 700 26px var(--mono); letter-spacing: 3px; color: var(--fg); text-align: right; }
+.code-row .code.low { color: color-mix(in srgb, var(--accent) 70%, white); }
+.code-row .m-level { grid-column: 1 / -1; height: 3px; }
+.code-row .m-level > i { transition: width 1s linear; }
+.code-row .actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.code-row .actions .note { color: var(--faint); font-size: 12px; }
+.code-row .trash { opacity: 0; transition: opacity 90ms var(--ease); }
+.code-row:hover .trash { opacity: 1; }
+.empty { padding: 48px 0; text-align: center; color: var(--muted); display: grid; gap: 14px; justify-items: center; }
+
+/* modal */
+.backdrop { position: fixed; inset: 0; background: color-mix(in srgb, black 55%, transparent); display: grid; place-items: center; padding: 16px; z-index: 10; }
+.modal .content textarea { min-height: 110px; padding: 10px 11px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font: 13px var(--mono); resize: vertical; outline: none; }
+.modal .content textarea:focus { border-color: var(--fg); }
+.modal .result { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.drop { border: 1px dashed var(--faint); padding: 22px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop:hover { border-color: var(--fg); color: var(--fg); }
+
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
