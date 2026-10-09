@@ -46,3 +46,24 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 
 #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
 .sync-line { margin: -8px 0 14px; font-size: 12px; }
+
+/* combined home: toolbar, filter, logins */
+.bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.bar .grow { flex: 1; }
+.filter { margin-bottom: 14px; }
+.filter button { min-width: 110px; }
+.item.login { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 16px; padding: 11px 14px; border: 1px solid var(--border); border-left: 3px solid var(--teal); margin-bottom: 8px; background: var(--surface); transition: background-color 90ms var(--ease); }
+.item.login:hover { background: var(--surface2); }
+.item.login .who b { display: block; font-size: 15px; }
+.item.login .who span { color: var(--muted); font-size: 12px; }
+.item.login .actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.item.login .actions .grow { flex: 1; }
+.mini { display: inline-flex; align-items: center; gap: 8px; padding: 2px 8px; border: 1px solid var(--border); background: var(--bg); }
+.mini .mono { font: 700 15px var(--mono); letter-spacing: 2px; }
+.mini .mono.low { color: color-mix(in srgb, var(--accent) 70%, white); }
+.mini-bar { width: 42px; height: 3px; }
+
+/* login editor */
+.pw { display: flex; gap: 8px; align-items: center; }
+.pw .grow { flex: 1; }
+.modal .content select.m-field { width: 100%; cursor: pointer; }
