@@ -13,6 +13,7 @@ apps/
   vault/       Vault: encrypted 2FA + passwords + passkeys
     src/vault.ts        items sealed one by one, recovery kit, two-device merge
     src/xivlauncher.ts  sends the FFXIV code to XIVLauncher (port 4646) when it asks
+  letterbox/   Letterbox: the mail client on the Zoho mailbox, live at marobotic.dev/letterbox
 ```
 
 ```sh

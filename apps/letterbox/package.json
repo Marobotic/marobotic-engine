@@ -1,0 +1,11 @@
+{
+  "name": "@marobotic/letterbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Letterbox: Marobotic's mail client on a Zoho mailbox.",
+  "scripts": {
+    "build:ui": "node build.mjs",
+    "serve": "node --import tsx server/server.ts"
+  }
+}

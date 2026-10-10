@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Letterbox</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="marochy.css">
+  <link rel="stylesheet" href="engine.css">
+  <link rel="stylesheet" href="letterbox.css">
+</head>
+<body>
+  <form id="gate" class="gate m-modal" hidden>
+    <header><span><span class="logo">&#xf0e0;</span> Letterbox</span></header>
+    <div class="sub">Sign in with your marobotic account.</div>
+    <div class="content">
+      <label class="lab" for="em">Email</label><input id="em" class="m-field" type="email" autocomplete="username" required>
+      <label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="current-password" required>
+      <div id="gate-error" class="error-text" hidden></div>
+    </div>
+    <footer><button class="m-btn primary" id="signin">Sign in</button></footer>
+  </form>
+
+  <div class="app" id="app" hidden>
+    <aside class="m-sidebar side">
+      <div class="brand"><span class="logo">&#xf0e0;</span> Letterbox</div>
+      <button class="m-btn primary compose-btn" id="compose">&#xf040; Compose</button>
+      <nav id="folders"></nav>
+      <footer class="side-foot">
+        <div id="email" class="faint"></div>
+        <div id="sync" class="m-sync" style="--state: var(--faint)">Connecting</div>
+        <button class="m-btn subtle compact" id="signout">&#xf08b; Sign out</button>
+      </footer>
+    </aside>
+    <main class="main">
+      <section id="listview" class="view">
+        <header class="top">
+          <label class="check" title="Select all"><input type="checkbox" id="all"><span></span></label>
+          <h2 class="m-section" id="title">INBOX</h2>
+          <button class="m-btn subtle compact" id="refresh" title="Refresh">&#xf021;<span class="wide"> Refresh</span></button>
+        </header>
+        <div class="bulk" id="bulk" hidden>
+          <span id="count" class="count"></span>
+          <button class="m-btn subtle compact" data-act="read">&#xf2b6;<span class="wide"> Mark read</span></button>
+          <button class="m-btn subtle compact" data-act="unread">&#xf0e0;<span class="wide"> Mark unread</span></button>
+          <button class="m-btn subtle compact" data-act="spam">&#xf05e;<span class="wide"> Spam</span></button>
+          <button class="m-btn subtle compact" data-act="notspam">&#xf00c;<span class="wide"> Not spam</span></button>
+          <button class="m-btn subtle compact danger" data-act="delete">&#xf1f8;<span class="wide" id="delete-label"> Delete</span></button>
+          <button class="m-btn subtle compact clear" id="clear" title="Clear selection">&#xf00d;</button>
+        </div>
+        <div id="list" class="list"></div>
+        <div class="more"><button class="m-btn compact" id="more" hidden>Load more</button></div>
+      </section>
+
+      <section id="reader" class="view reader" hidden>
+        <header class="rtop">
+          <button class="m-btn subtle compact" id="back" title="Back (Esc)">&#xf060;<span class="wide"> Back</span></button>
+          <span class="grow"></span>
+          <button class="m-btn subtle compact" id="r-reply">&#xf112;<span class="wide"> Reply</span></button>
+          <button class="m-btn subtle compact" id="r-unread">&#xf0e0;<span class="wide"> Mark unread</span></button>
+          <button class="m-btn subtle compact" id="r-spam">&#xf05e;<span class="wide"> Spam</span></button>
+          <button class="m-btn subtle compact" id="r-notspam">&#xf00c;<span class="wide"> Not spam</span></button>
+          <button class="m-btn subtle compact danger" id="r-delete">&#xf1f8;<span class="wide"> Delete</span></button>
+        </header>
+        <div class="rhead">
+          <h1 id="r-subject" dir="auto"></h1>
+          <div class="meta">
+            <div><b id="r-from" dir="auto"></b> <span id="r-addr" class="faint"></span></div>
+            <div class="faint" id="r-to" dir="auto"></div>
+            <div class="faint" id="r-when"></div>
+          </div>
+          <div id="r-files" class="files"></div>
+        </div>
+        <div class="letter"><iframe id="r-body" title="Message" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="composer" class="overlay" hidden>
+    <form class="m-modal compose" id="compose-form" novalidate>
+      <header><span id="c-title">New message</span><button type="button" class="m-btn subtle compact" id="c-close" title="Close">&#xf00d;</button></header>
+      <div class="content">
+        <div class="line"><label for="c-to">To</label><input id="c-to" class="m-field" autocomplete="off" placeholder="name@example.com, ..."><button type="button" class="m-btn subtle compact" id="c-ccbtn">Cc/Bcc</button></div>
+        <div class="line" id="c-ccline" hidden><label for="c-cc">Cc</label><input id="c-cc" class="m-field" autocomplete="off"></div>
+        <div class="line" id="c-bccline" hidden><label for="c-bcc">Bcc</label><input id="c-bcc" class="m-field" autocomplete="off"></div>
+        <div class="line"><label for="c-subject">Subject</label><input id="c-subject" class="m-field" autocomplete="off" dir="auto"></div>
+        <textarea id="c-text" class="body" dir="auto" placeholder="Write your message"></textarea>
+        <div id="c-files" class="files"></div>
+        <div id="c-error" class="error-text" hidden></div>
+      </div>
+      <footer>
+        <input type="file" id="c-file" multiple hidden>
+        <button type="button" class="m-btn subtle" id="c-attach">&#xf0c6; Attach files</button>
+        <span class="grow faint drop-hint">or drop files here</span>
+        <button class="m-btn primary" id="c-send">&#xf1d8; Send</button>
+      </footer>
+    </form>
+  </div>
+
+  <div id="toast" class="m-toast" hidden></div>
+  <script src="main.js"></script>
+</body>
+</html>

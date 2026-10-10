@@ -1,0 +1,129 @@
+/* Letterbox's screens, on the Marochy kit (marochy.css + engine.css). */
+.app { display: flex; height: 100vh; }
+.grow { flex: 1; }
+.faint { color: var(--faint); }
+.error-text { color: color-mix(in srgb, var(--accent) 60%, white); font-size: 13px; }
+
+/* sign-in */
+.gate { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); width: min(400px, calc(100% - 32px)); }
+.gate .logo, .brand .logo { color: var(--accent); }
+.gate .content { gap: 8px; }
+.gate .m-field { width: 100%; }
+.lab { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+/* sidebar */
+.side { display: flex; flex-direction: column; flex: none; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 14px 14px; font: 700 17px var(--mono); }
+.compose-btn { margin: 0 2px 14px; justify-content: center; }
+#folders { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.m-nav { cursor: pointer; user-select: none; transition: background-color 90ms var(--ease), color 90ms var(--ease); }
+.m-nav .ico { width: 16px; text-align: center; }
+.m-nav .name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.m-nav.sub { padding-left: 30px; font-size: 14px; }
+.m-nav .badge { margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 700; }
+.nav-sep { height: 1px; margin: 6px 0; background: var(--border); }
+.side-foot { margin-top: auto; display: grid; gap: 6px; padding: 12px 14px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.side-foot .m-btn { justify-self: start; margin-left: -8px; }
+
+/* main column */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 12px; padding: 18px 24px 4px 34px; }
+.top .m-section { flex: 1; margin: 0; }
+.list { flex: 1; overflow-y: auto; padding: 0 24px 12px; }
+.group { margin: 18px 0 6px; font-size: 12px; }
+
+/* checkboxes: a square that fills red */
+.check { position: relative; display: inline-flex; width: 16px; height: 16px; flex: none; cursor: pointer; }
+.check input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.check span { width: 16px; height: 16px; border: 1px solid var(--faint); background: var(--bg); transition: background-color 90ms var(--ease), border-color 90ms var(--ease); }
+.check:hover span { border-color: var(--fg); }
+.check input:checked + span { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--bg); }
+.check input:indeterminate + span { background: linear-gradient(var(--accent), var(--accent)) center / 8px 2px no-repeat var(--bg); border-color: var(--accent); }
+.check input:focus-visible + span { outline: 1px solid var(--fg); outline-offset: 2px; }
+
+/* the bar that appears when mail is selected */
+.bulk { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 6px 24px 0; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); }
+.bulk .count { font: 600 13px var(--mono); margin-right: 8px; }
+.bulk .clear { margin-left: auto; }
+.m-btn.danger.subtle { background: transparent; color: color-mix(in srgb, var(--accent) 60%, white); }
+
+.mail { display: grid; grid-template-columns: 16px 7px minmax(120px, 220px) 1fr auto; align-items: center; gap: 12px;
+        min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--border); cursor: pointer;
+        transition: background-color 90ms var(--ease); }
+.mail:hover { background: var(--surface); }
+.mail.selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.mail .dot { width: 7px; height: 7px; }
+.mail.unread .dot { background: var(--accent); }
+.mail .from { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); unicode-bidi: plaintext; }
+.mail.unread .from { color: var(--fg); font-weight: 700; }
+.mail .text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 14px var(--sans); }
+.mail .text > span { unicode-bidi: isolate; } /* an Arabic subject must not flip the whole row */
+.mail .subject { color: var(--muted); }
+.mail.unread .subject { color: var(--fg); font-weight: 600; }
+.mail .summary { color: var(--faint); }
+.mail .side-info { display: flex; gap: 10px; align-items: center; color: var(--faint); font-size: 12px; white-space: nowrap; }
+.mail .m-chip { height: 18px; font-size: 11px; }
+.mail .flag { color: var(--gold); }
+.mail .count { color: var(--muted); }
+
+.empty, .error { padding: 40px 0; text-align: center; color: var(--muted); }
+.error { color: color-mix(in srgb, var(--accent) 60%, white); }
+.more { display: flex; justify-content: center; padding: 0 0 18px; }
+
+/* reader */
+.rtop { display: flex; align-items: center; gap: 4px; padding: 14px 24px 10px; border-bottom: 1px solid var(--border); }
+.rhead { padding: 16px 24px 12px; }
+.rhead h1 { margin: 0 0 10px; font: 600 20px/1.3 var(--sans); overflow-wrap: anywhere; }
+.rhead .meta { display: grid; gap: 3px; font-size: 13px; }
+.rhead .meta b { font-weight: 700; }
+.files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.files:empty { display: none; }
+.files .file { height: auto; min-height: 24px; padding: 2px 8px; gap: 6px; color: var(--fg); text-decoration: none; text-transform: none; letter-spacing: 0; font-weight: 400; max-width: 100%; overflow-wrap: anywhere; }
+a.file:hover { border-color: var(--fg); }
+.files .file.bad { color: color-mix(in srgb, var(--accent) 60%, white); }
+.files .x { margin-left: 2px; padding: 0 2px; background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; }
+.files .x:hover { color: var(--fg); }
+.letter { flex: 1; min-height: 0; margin: 0 24px 18px; background: #fff; }
+.letter iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+/* compose */
+.overlay { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, #000 60%, transparent); }
+.compose { width: min(760px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.compose.dropping { border-color: var(--accent); }
+.compose header { align-items: center; padding-bottom: 10px; }
+.compose .content { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.compose .line { display: flex; align-items: center; gap: 10px; }
+.compose .line label { width: 56px; flex: none; color: var(--muted); font-size: 13px; }
+.compose .line .m-field { flex: 1; min-width: 0; width: 100%; }
+.compose .body { flex: 1; min-height: 280px; resize: vertical; padding: 10px 11px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font: 15px/1.5 var(--sans); outline: none; }
+.compose .body:focus { border-color: var(--fg); }
+.compose footer { align-items: center; }
+.drop-hint { font-size: 12px; }
+
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
+
+@media (max-width: 720px) {
+  .app { flex-direction: column; height: auto; min-height: 100vh; }
+  .side { width: auto; padding: 12px 16px 0; border-right: 0; border-bottom: 1px solid var(--border); }
+  .brand { padding: 0 0 10px; }
+  .compose-btn { position: fixed; right: 16px; bottom: 16px; z-index: 5; margin: 0; }
+  #folders { flex-direction: row; overflow-x: auto; padding-bottom: 8px; }
+  .m-nav, .m-nav.sub { flex: none; padding: 0 12px; font-size: 13px; }
+  .side-foot { display: none; }
+  .top { padding: 14px 16px 4px 26px; }
+  .list { padding: 0 16px 70px; }
+  .bulk { margin: 6px 16px 0; }
+  .wide { display: none; }
+  .mail { grid-template-columns: 16px 7px 1fr auto; grid-template-areas: "box dot from info" ". . text text"; row-gap: 2px; }
+  .mail .check { grid-area: box; } .mail .dot { grid-area: dot; } .mail .from { grid-area: from; }
+  .mail .side-info { grid-area: info; } .mail .text { grid-area: text; }
+  .rtop { padding: 10px 16px; }
+  .rhead { padding: 12px 16px 10px; }
+  .letter { margin: 0 0 0; min-height: 70vh; }
+  .overlay { padding: 0; place-items: stretch; }
+  .compose { max-height: 100vh; height: 100vh; border: 0; }
+  .drop-hint { display: none; }
+  .compose footer { justify-content: space-between; }
+  .compose .body { min-height: 160px; }
+}
