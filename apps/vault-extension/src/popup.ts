@@ -198,6 +198,7 @@ async function detailScreen(id: string) {
   const body = h(`<div class="scroll"></div>`);
   const acts = h(`<div class="actions"><button class="danger" id="del">&#xf1f8; Delete</button><span class="grow"></span></div>`);
   if (d.kind === "login") {
+    if (d.email) body.append(field("Email", d.email, { copy: d.email }));
     if (d.username) body.append(field("Username", d.username, { copy: d.username }));
     if (d.password) body.append(field("Password", d.password, { secret: true, copy: d.password }));
     if (d.code) body.append(codeField(d.code.code, d.code.remaining, d.code.period));
@@ -252,7 +253,8 @@ async function editScreen(d: Extract<Detail, { kind: "login" }> | null) {
     h(`<div class="bar"><button class="icon" id="back" title="Back">&#xf060;</button><span class="title">${d ? "Edit login" : "New login"}</span></div>`),
     h(`<div class="scroll"><form class="edit">
       <label>Title</label><input id="name" value="${esc(name)}">
-      <label>Username or email</label><input id="user" value="${esc(d?.username ?? "")}" autocomplete="off">
+      <label>Email</label><input id="email" type="email" value="${esc(d?.email ?? "")}" autocomplete="off">
+      <label>Username</label><input id="user" value="${esc(d?.username ?? "")}" autocomplete="off" placeholder="only if the site has one besides the email">
       <label>Password</label>
       <div class="pwrow"><input id="pass" type="password" value="${esc(d?.password ?? "")}" autocomplete="new-password"><button type="button" class="icon" id="eye" title="Show">&#xf06e;</button><button type="button" id="gen" title="Make a strong password">&#xf021; Generate</button></div>
       <label>One-time code (2FA)</label>
@@ -272,7 +274,7 @@ async function editScreen(d: Extract<Detail, { kind: "login" }> | null) {
   $("#rmOtp")?.addEventListener("click", (e) => { removeOtp = true; (e.currentTarget as HTMLElement).parentElement!.remove(); });
   $("#save").onclick = async () => {
     const login: LoginInput = {
-      ...(d ? { id: d.id } : {}), name: $<HTMLInputElement>("#name").value, username: $<HTMLInputElement>("#user").value, password: pass.value,
+      ...(d ? { id: d.id } : {}), name: $<HTMLInputElement>("#name").value, username: $<HTMLInputElement>("#user").value, email: $<HTMLInputElement>("#email").value, password: pass.value,
       urls: $<HTMLInputElement>("#url").value.split(/[\s,]+/).filter(Boolean), notes: $<HTMLTextAreaElement>("#notes").value,
       otpKey: $<HTMLInputElement>("#otpKey").value, removeOtp,
     };

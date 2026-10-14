@@ -45,3 +45,10 @@ test("app package names give matching words", () => {
   assert.deepEqual(packageWords("com.github.android"), ["github"]);
   assert.deepEqual(packageWords("com.square_enix.android_googleplay.FFXIVApp"), ["squareenix", "androidgoogleplay", "ffxivapp"]);
 });
+
+test("a login saved without an address matches the site its name names, exactly", () => {
+  const L = { id: "d", data: { name: "Discord - Talk, Play, Hang Out with Friends", urls: [] as string[], username: "" } };
+  assert.deepEqual(loginsFor("https://discord.com/login", [L]).map((l) => l.id), ["d"]);
+  assert.deepEqual(loginsFor("https://discord.xyz/login", [L]), []);
+  assert.deepEqual(loginsFor("https://discord.com.evil.io/login", [L]), []);
+});

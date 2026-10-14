@@ -7,8 +7,9 @@ import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem, type P
 import { ffxivEntries, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
 import { siteOf } from "../src/icons.ts";
-import { MULTI, SAME_SIGN_IN, loginsFor, siteKey } from "../src/domains.ts";
+import { MULTI, SAME_SIGN_IN, loginsFor, namedSite, siteKey } from "../src/domains.ts";
 import { allCodes, mergeCodesIntoLogins } from "../src/merge.ts";
+import { importLogins as importLoginsInto } from "../src/importLogins.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -111,7 +112,7 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
   const quick = mode === "signin" && platform.quickUnlock.state() === "saved";
   const create = mode === "create", forgot = mode === "forgot";
   app.replaceChildren(h(`
-    <div class="login">
+    <div class="signin">
       ${pixelLock()}
       <div class="title">Vault</div>
       <div class="tag">Your passwords, 2FA codes and passkeys, on every device.</div>
@@ -484,7 +485,7 @@ function renderList() {
   const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || a.data.name.localeCompare(b.data.name));
   const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
-  if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
+  if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.email ?? ""} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
   const ps = passkeys().sort((a, b) => (a.data.rpName || a.data.rpId).localeCompare(b.data.rpName || b.data.rpId));
   if (filter === "login") for (const i of ps) if (matchesQuery(`${i.data.rpName ?? ""} ${i.data.rpId} ${i.data.username}`)) rows.push(passkeyRow(i));
   const ff = new Set(ffxivEntries(ts.map((i) => i.data.otp)));
@@ -552,6 +553,7 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
     const d = i.data, linked = codeFor(d), who = d.username || d.name;
     const copies: MenuSection["items"] = [];
     if (d.password) copies.push({ label: "Copy password", icon: "&#xf084;", onClick: () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000) });
+    if (d.email) copies.push({ label: "Copy email", icon: "&#xf0e0;", onClick: () => void copy(d.email!, `Email copied · ${d.name}`) });
     if (d.username) copies.push({ label: "Copy username", icon: "&#xf007;", onClick: () => void copy(d.username, `Username copied · ${d.name}`) });
     if (linked) copies.push({ label: "Copy 2FA code", icon: "&#xf023;", onClick: () => void copyCode(i.id, linked, who) });
     openMenu(x, y, [{ title: d.name, items: copies }, { items: [pin, { label: "Edit", icon: "&#xf044;", onClick: () => loginEditor(i as LoginRow) }] }, { items: [del] }]);
@@ -578,23 +580,27 @@ function loginRow(i: LoginRow): HTMLElement {
   const d = i.data;
   const host = d.urls[0] ? hostOf(d.urls[0]) : "";
   const linked = codeFor(d);
-  const small = host && host !== d.name.toLowerCase() ? `${d.name} · ${host}` : d.name;
+  const site = host && host !== d.name.toLowerCase() ? `${d.name} · ${host}` : d.name;
+  // The email big when there is one (most sites sign in with it), the username under it.
+  const small = d.email && d.username ? `${d.username} · ${site}` : site;
   const row = h(`
     <div class="item login" data-login="${i.id}">
       <span class="tileslot"></span>
-      ${whoLines(d.username, small, !!d.favorite)}
+      ${whoLines(d.email || d.username, small, !!d.favorite)}
       <div class="tools">
         <button class="m-btn subtle compact" data-edit title="Edit">&#xf044;</button>
         <button class="m-btn subtle compact" data-menu title="More">&#xf142;</button>
       </div>
       <div class="actions">
+        ${d.email ? `<button class="m-btn subtle compact" data-cemail>&#xf0e0; Email</button>` : ""}
         ${d.username ? `<button class="m-btn subtle compact" data-cuser>&#xf007; User</button>` : ""}
         ${d.password ? `<button class="m-btn subtle compact" data-cpass>&#xf084; Password</button>` : ""}
         ${linked ? `<button class="mini" title="Copy the 2FA code" data-ccode><span class="mono" data-code>······</span><span class="m-level mini-bar"><i data-bar></i></span></button>` : ""}
       </div>
     </div>`).firstElementChild as HTMLElement;
   row.querySelector(".tileslot")!.replaceWith(entryIcon(d.name, siteOf({ urls: d.urls, name: d.name })));
-  const who = d.username || d.name;
+  const who = d.email || d.username || d.name;
+  row.querySelector<HTMLElement>("[data-cemail]")?.addEventListener("click", () => void copy(d.email!, `Email copied · ${d.name}`));
   row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => void copy(d.username, `Username copied · ${d.name}`));
   row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000));
   row.querySelector<HTMLElement>("[data-ccode]")?.addEventListener("click", () => { if (linked) void copyCode(i.id, linked, who); });
@@ -684,7 +690,8 @@ function loginEditor(existing: LoginRow | null) {
         <div class="content">
           <label class="lab">Name</label><input class="m-field" id="name" value="${esc(d.name)}" placeholder="e.g. GitHub" required>
           <label class="lab">Website</label><input class="m-field" id="url" value="${esc(d.urls.join(", "))}" placeholder="github.com">
-          <label class="lab">Username or email</label><input class="m-field" id="user" value="${esc(d.username)}" autocomplete="off">
+          <label class="lab">Email</label><input class="m-field" id="email" type="email" value="${esc(d.email ?? "")}" autocomplete="off" autocapitalize="off">
+          <label class="lab">Username</label><input class="m-field" id="user" value="${esc(d.username)}" autocomplete="off" autocapitalize="off" placeholder="only if the site has one besides the email">
           <label class="lab">Password</label>
           <div class="pw"><input class="m-field grow" id="pass" type="password" value="${esc(d.password)}" autocomplete="off"><button class="m-btn subtle compact" type="button" id="show"></button><button class="m-btn subtle compact" type="button" id="gen"> Generate</button></div>
           <label class="lab">One-time code (2FA)</label>
@@ -745,11 +752,12 @@ function loginEditor(existing: LoginRow | null) {
     const name = $<HTMLInputElement>("#name", back).value.trim();
     if (!name) return void ($("#result", back).textContent = "Give it a name.");
     const username = $<HTMLInputElement>("#user", back).value.trim();
+    const email = $<HTMLInputElement>("#email", back).value.trim();
     const typed = back.querySelector<HTMLInputElement>("#otpKey")?.value.trim() ?? "";
     if (typed) {
       try {
         if (/^otpauth/i.test(typed)) { const r = importText(typed); if (!r.entries[0]) throw new Error(r.skipped[0] ?? "that link has no 2FA code"); otp = r.entries[0]; }
-        else { const k = checkKey(typed); if (!k.ok) throw new Error(k.message); otp = normalizeEntry({ issuer: name, account: username, secret: k.clean }); }
+        else { const k = checkKey(typed); if (!k.ok) throw new Error(k.message); otp = normalizeEntry({ issuer: name, account: email || username, secret: k.clean }); }
       } catch (e) { return void ($("#result", back).textContent = `One-time code: ${(e as Error).message}`); }
     }
     const data: LoginItem = {
@@ -757,6 +765,7 @@ function loginEditor(existing: LoginRow | null) {
       name,
       urls: $<HTMLInputElement>("#url", back).value.split(/[\s,]+/).filter(Boolean),
       username,
+      ...(email ? { email } : {}),
       password: pass.value,
       notes: $<HTMLTextAreaElement>("#notes", back).value,
       ...(otp ? { otp } : {}),
@@ -1048,19 +1057,9 @@ async function addCodes(r: ImportResult) {
 /** Import logins from a password-manager CSV; each login's 2FA key becomes a linked code. */
 async function importLogins(text: string): Promise<string[]> {
   const res = importPasswordCsv(text);
-  const haveLogin = new Set(logins().map((i) => `${i.data.name}|${i.data.username}`.toLowerCase()));
-  const haveCode = new Set(otps().map((i) => i.data.otp.secret));
-  let added = 0, already = 0, withCode = 0;
-  for (const l of res.logins) {
-    if (haveLogin.has(`${l.name}|${l.username}`.toLowerCase())) { already++; continue; }
-    const otp = l.totp && !haveCode.has(l.totp.secret) ? l.totp : undefined;
-    if (otp) { haveCode.add(otp.secret); withCode++; }
-    vault!.add({ type: "login", name: l.name, urls: l.urls, username: l.username, password: l.password, notes: l.notes, ...(otp ? { otp } : {}) });
-    haveLogin.add(`${l.name}|${l.username}`.toLowerCase());
-    added++;
-  }
-  if (added || withCode) await save();
-  return [`From ${res.source}: added ${added} login${added === 1 ? "" : "s"}${withCode ? ` (${withCode} with a 2FA code)` : ""}${already ? `, ${already} already here` : ""}.`, ...res.skipped.map((s) => `Skipped - ${s}`)];
+  const { added, already, withCode, filled } = importLoginsInto(vault!, res);
+  if (added || withCode || filled) await save();
+  return [`From ${res.source}: added ${added} login${added === 1 ? "" : "s"}${withCode ? ` (${withCode} with a 2FA code)` : ""}${filled ? `, filled in the email of ${filled} you already had` : ""}${already ? `, ${already} already here` : ""}.`, ...res.skipped.map((s) => `Skipped - ${s}`)];
 }
 
 async function readQr(f: File): Promise<string | null> {
@@ -1088,9 +1087,10 @@ function refreshAutofill() {
     rules: { multi: [...MULTI], groups: SAME_SIGN_IN },
     logins: ls.map((l) => {
       const otp = codeFor(l.data);
-      const hosts = l.data.urls.map(hostOf).filter((x) => x && !x.includes(" "));
+      // No address saved: the site its name names (the same exact rule the extension uses).
+      const hosts = l.data.urls.length ? l.data.urls.map(hostOf).filter((x) => x && !x.includes(" ")) : [namedSite(l.data.name)].filter(Boolean);
       return {
-        id: l.id, name: l.data.name, username: l.data.username, password: l.data.password, hosts,
+        id: l.id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", password: l.data.password, hosts,
         words: [...new Set([word(l.data.name), ...hosts.map((x) => word(siteKey(x).split(".")[0] ?? ""))].filter((w) => w.length > 2))],
         ...(otp ? { otp: otpOf(otp) } : {}),
       };
@@ -1115,14 +1115,16 @@ async function takeAndroidSaves() {
   for (const s of saves) {
     if (!s.password) continue;
     const site = s.url ? loginsFor(s.url, logins()) : logins().filter((l) => s.app && l.data.urls.includes(`androidapp://${s.app}`));
-    const same = s.username ? site.find((l) => l.data.username.toLowerCase() === s.username.toLowerCase()) : site.length === 1 ? site[0] : undefined;
+    const who = s.username.toLowerCase();
+    const same = s.username ? site.find((l) => l.data.username.toLowerCase() === who || (l.data.email ?? "").toLowerCase() === who) : site.length === 1 ? site[0] : undefined;
     if (same) {
       if (same.data.password !== s.password) { vault.update(same.id, { ...same.data, password: s.password }); toast(`Password updated · ${same.data.name}`); }
       continue;
     }
     const host = s.url ? hostOf(s.url) : "";
     const name = host ? (siteKey(host).split(".")[0] ?? host).replace(/^./, (c) => c.toUpperCase()) : (s.app.split(".").filter((p) => !/^(com|org|net|android|app)$/.test(p)).pop() ?? s.app).replace(/^./, (c) => c.toUpperCase());
-    vault.add({ type: "login", name, urls: host ? [`https://${host}`] : [`androidapp://${s.app}`], username: s.username, password: s.password, notes: "" });
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.username);
+    vault.add({ type: "login", name, urls: host ? [`https://${host}`] : [`androidapp://${s.app}`], username: isEmail ? "" : s.username, ...(isEmail ? { email: s.username } : {}), password: s.password, notes: "" });
     toast(`Login saved · ${name}`);
   }
   if (saves.length) { await save(); renderList(); }
@@ -1151,6 +1153,7 @@ setInterval(() => {
     vault = made.vault;
     vault.add({ type: "login", name: "GitHub", urls: ["github.com"], username: "mi@marobotic.dev", password: "s3cr3t-demo", notes: "" });
     vault.add({ type: "login", name: "Square Enix", urls: ["https://secure.square-enix.com"], username: "maro", password: "demo-pw-9", notes: "" });
+    vault.add({ type: "login", name: "Discord - Talk, Play, Hang Out with Friends", urls: [], username: "", email: "someone.with.a.long.address@example.com", password: "demo-pw-3", notes: "" });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "GitHub", account: "mi@marobotic.dev", secret: "JBSWY3DPEHPK3PXP" }) });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro", secret: "GEZDGNBVGY3TQOJQ" }) });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro-alt", secret: "MFRGGZDFMZTWQ2LK" }) });

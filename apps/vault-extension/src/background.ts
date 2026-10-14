@@ -173,7 +173,7 @@ async function matches(url: string) {
   if (!fillableUrl(url)) return { logins: [], codes: [], passkeys: [] };
   const s = await settings();
   return {
-    logins: s.suggest ? loginsFor(url, logins()).map((l) => ({ id: l.id, name: l.data.name, username: l.data.username, site: loginSite(l.data) })) : [],
+    logins: s.suggest ? loginsFor(url, logins()).map((l) => ({ id: l.id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", site: loginSite(l.data) })) : [],
     codes: s.suggestCodes ? await Promise.all(codesFor(url, codes(), logins()).map(codeHit)) : [],
     passkeys: s.passkeys ? passkeys().filter(passkeyOn(hostOf(url))).map((p) => ({ id: p.id, rpId: p.data.rpId, username: p.data.username, displayName: p.data.displayName ?? "" })) : [],
   };
@@ -186,9 +186,9 @@ async function summaries(q: string, siteUrl: string | null): Promise<Summary[]> 
   const cs = (siteUrl ? codesFor(siteUrl, codes(), logins()) : codes()).filter((c) => !c.data.inLogin);
   const ps = siteUrl ? passkeys().filter(passkeyOn(hostOf(siteUrl))) : passkeys();
   const out: Summary[] = [];
-  for (const l of ls) if (hit(`${l.data.name} ${l.data.username} ${l.data.urls.join(" ")}`)) {
+  for (const l of ls) if (hit(`${l.data.name} ${l.data.email ?? ""} ${l.data.username} ${l.data.urls.join(" ")}`)) {
     const c = l.data.otp ? await fresh(l.data.otp) : undefined;
-    out.push({ id: l.id, kind: "login", title: l.data.name, sub: l.data.username, site: loginSite(l.data), favorite: l.data.favorite,
+    out.push({ id: l.id, kind: "login", title: l.data.name, sub: l.data.email || l.data.username, site: loginSite(l.data), favorite: l.data.favorite,
       ...(c ? { code: c.code, remaining: c.remaining, period: l.data.otp!.period } : {}) });
   }
   for (const c of cs) if (hit(`${codeName(c)} ${c.data.otp.account}`)) {
@@ -205,7 +205,7 @@ async function detail(id: string): Promise<Detail | { error: string }> {
   if (!it) return { error: "not found" };
   if (it.data.type === "login") {
     const l = it as LoginRow, c = linkedCode(l);
-    return { kind: "login", id, name: l.data.name, username: l.data.username, password: l.data.password, urls: l.data.urls, notes: l.data.notes ?? "", site: loginSite(l.data), favorite: l.data.favorite, ...(c ? { code: await codeHit(c) } : {}) };
+    return { kind: "login", id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", password: l.data.password, urls: l.data.urls, notes: l.data.notes ?? "", site: loginSite(l.data), favorite: l.data.favorite, ...(c ? { code: await codeHit(c) } : {}) };
   }
   if (it.data.type === "totp") { const c = it as TotpRow; return { kind: "totp", id, issuer: codeName(c), account: c.data.otp.account, site: siteOf({ issuer: c.data.otp.issuer }), code: await codeHit(c), favorite: c.data.favorite }; }
   if (it.data.type === "passkey") { const p = it.data; return { kind: "passkey", id, rpId: p.rpId, rpName: p.rpName || p.rpId, username: p.username, displayName: p.displayName ?? "", created: p.created, site: siteKey(p.rpId) }; }
@@ -223,15 +223,15 @@ function otpFrom(text: string, issuer: string, account: string): OtpEntry {
 }
 
 async function saveLogin(input: LoginInput) {
-  const data: LoginItem = { type: "login", name: input.name.trim() || hostOf(input.urls[0] ?? "") || "Login", urls: input.urls.filter(Boolean), username: input.username.trim(), password: input.password, notes: input.notes };
+  const data: LoginItem = { type: "login", name: input.name.trim() || hostOf(input.urls[0] ?? "") || "Login", urls: input.urls.filter(Boolean), username: input.username.trim(), ...(input.email.trim() ? { email: input.email.trim() } : {}), password: input.password, notes: input.notes };
   const old = input.id ? vault!.get(input.id) : undefined;
   if (input.id && old?.data.type !== "login") return { error: "not found" };
   let otp = old?.data.type === "login" ? old.data.otp : undefined;
   if (input.removeOtp) otp = undefined;
-  if (input.otpKey?.trim()) { try { otp = otpFrom(input.otpKey, data.name, data.username); } catch (e) { return { error: `One-time code: ${(e as Error).message}` }; } }
+  if (input.otpKey?.trim()) { try { otp = otpFrom(input.otpKey, data.name, data.email || data.username); } catch (e) { return { error: `One-time code: ${(e as Error).message}` }; } }
   if (otp) data.otp = otp;
   if (old?.data.type === "login") {
-    const { otp: _o, totpId: _t, ...rest } = old.data;
+    const { otp: _o, totpId: _t, email: _e, ...rest } = old.data;
     vault!.update(old.id, { ...rest, ...data });
   } else vault!.add(data);
   await save();
@@ -250,7 +250,8 @@ async function submitted(tabId: number, url: string, username: string, password:
     if (lu && Date.now() - lu.at < 10 * 60_000) username = lu.username;
   }
   const site = loginsFor(url, logins());
-  const same = username ? site.find((l) => l.data.username.toLowerCase() === username.toLowerCase()) : site.length === 1 ? site[0] : undefined;
+  const who = username.toLowerCase();
+  const same = username ? site.find((l) => l.data.username.toLowerCase() === who || (l.data.email ?? "").toLowerCase() === who) : site.length === 1 ? site[0] : undefined;
   if (same && same.data.password === password) return;
   const p: PendingSave = { id: crypto.randomUUID(), tabId, url, username, password, state: same ? "changed" : "new", name: same?.data.name, loginId: same?.id, at: Date.now() };
   await mem.set({ [`pending:${tabId}`]: p });
@@ -282,7 +283,8 @@ async function decide(id: string, decision: "save" | "never") {
   else {
     const host = hostOf(p.url);
     const base = siteKey(host).split(".")[0] ?? host;
-    vault.add({ type: "login", name: base.charAt(0).toUpperCase() + base.slice(1), urls: [`https://${host}`], username: p.username, password: p.password, notes: "" });
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.username);
+    vault.add({ type: "login", name: base.charAt(0).toUpperCase() + base.slice(1), urls: [`https://${host}`], username: isEmail ? "" : p.username, ...(isEmail ? { email: p.username } : {}), password: p.password, notes: "" });
   }
   await save();
   return { saved: existing ? "updated" : "added" };
@@ -350,7 +352,7 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
       const l = vault && fillableUrl(url) ? loginsFor(url, logins()).find((x) => x.id === m.id) : undefined;
       if (!l) return { error: "not for this site" };
       const c = linkedCode(l);
-      return { username: l.data.username, password: l.data.password, ...(c ? { code: (await fresh(c.data.otp)).code } : {}) };
+      return { username: l.data.username, email: l.data.email ?? "", password: l.data.password, ...(c ? { code: (await fresh(c.data.otp)).code } : {}) };
     }
     case "code": {
       const c = vault && fillableUrl(url) ? codesFor(url, codes(), logins()).find((x) => x.id === m.id) : undefined;
@@ -394,7 +396,7 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
       const l = tab?.url && vault ? loginsFor(tab.url, logins()).find((x) => x.id === m.id) : undefined;
       if (!tab?.id || !l) return { error: "This login isn't for the page that's open." };
       const c = linkedCode(l);
-      await chrome.tabs.sendMessage(tab.id, { t: "doFill", username: l.data.username, password: l.data.password, code: c ? (await fresh(c.data.otp)).code : "" }, { frameId: 0 });
+      await chrome.tabs.sendMessage(tab.id, { t: "doFill", username: l.data.username, email: l.data.email ?? "", password: l.data.password, code: c ? (await fresh(c.data.otp)).code : "" }, { frameId: 0 });
       return { ok: true };
     }
     case "setSettings": {

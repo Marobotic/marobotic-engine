@@ -3,7 +3,8 @@
 // 1Password, LastPass, Proton Pass, Dashlane and most others that export CSV.
 import { parseOtpauth, normalizeEntry, type OtpEntry } from "@marobotic/otp";
 
-export type LoginImport = { name: string; urls: string[]; username: string; password: string; notes: string; totp?: OtpEntry };
+/** A login from another app. `email` and `username` are kept apart when the file has both (Proton Pass does). */
+export type LoginImport = { name: string; urls: string[]; username: string; email: string; password: string; notes: string; totp?: OtpEntry };
 export type PasswordImportResult = { logins: LoginImport[]; skipped: string[]; source: string };
 
 /** RFC 4180 CSV: quoted fields may hold commas, quotes ("") and line breaks. */
@@ -35,7 +36,8 @@ export function parseCsv(text: string): string[][] {
 const COLUMNS = {
   name: ["name", "title", "login_name", "item name"],
   url: ["url", "login_uri", "website", "web site", "uri", "urls", "login url", "hostname", "origin_url"],
-  username: ["username", "login_username", "login", "user", "email", "user name", "login name"],
+  username: ["username", "login_username", "login", "user", "user name", "login name"],
+  email: ["email", "login_email", "e-mail", "email address"],
   password: ["password", "login_password", "pass"],
   notes: ["notes", "note", "extra", "comments", "comment"],
   totp: ["totp", "login_totp", "otpauth", "otp", "one-time password", "2fa", "otp secret"],
@@ -69,7 +71,7 @@ export function importPasswordCsv(text: string): PasswordImportResult {
   const header = rows[0]!.map((h) => h.trim().toLowerCase());
   out.source = sourceOf(header);
   const col = (k: keyof typeof COLUMNS) => { for (const n of COLUMNS[k]) { const i = header.indexOf(n); if (i >= 0) return i; } return -1; };
-  const at = { name: col("name"), url: col("url"), username: col("username"), password: col("password"), notes: col("notes"), totp: col("totp"), type: col("type") };
+  const at = { name: col("name"), url: col("url"), username: col("username"), email: col("email"), password: col("password"), notes: col("notes"), totp: col("totp"), type: col("type") };
   if (at.password < 0) { out.skipped.push(`no password column (columns: ${header.join(", ")})`); return out; }
   rows.slice(1).forEach((r, n) => {
     const get = (i: number) => (i >= 0 ? (r[i] ?? "").trim() : "");
@@ -77,13 +79,15 @@ export function importPasswordCsv(text: string): PasswordImportResult {
     if (at.type >= 0 && get(at.type) && !/^login$/i.test(get(at.type))) { out.skipped.push(`row ${line}: a ${get(at.type)}, not a login (only logins come in for now)`); return; }
     const password = at.password >= 0 ? (r[at.password] ?? "") : "";
     const url = get(at.url);
-    const username = get(at.username);
-    if (!password && !username) { out.skipped.push(`row ${line}: no username or password`); return; }
+    let username = get(at.username), email = get(at.email);
+    // One column holding an email (a "username" that is one, or only an email): it's the email.
+    if (!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) { email = username; username = ""; }
+    if (!password && !username && !email) { out.skipped.push(`row ${line}: no username, email or password`); return; }
     const urls = url ? url.split(/[\s,]+/).filter(Boolean) : [];
-    const name = get(at.name) || (urls[0] ? hostName(urls[0]) : "") || username || "Untitled";
+    const name = get(at.name) || (urls[0] ? hostName(urls[0]) : "") || email || username || "Untitled";
     let totp: OtpEntry | undefined;
-    try { totp = totpFrom(get(at.totp), name, username); } catch (e) { out.skipped.push(`row ${line} (${name}): its 2FA key was not readable - ${(e as Error).message}`); }
-    out.logins.push({ name, urls, username, password, notes: get(at.notes), totp });
+    try { totp = totpFrom(get(at.totp), name, email || username); } catch (e) { out.skipped.push(`row ${line} (${name}): its 2FA key was not readable - ${(e as Error).message}`); }
+    out.logins.push({ name, urls, username, email, password, notes: get(at.notes), totp });
   });
   return out;
 }

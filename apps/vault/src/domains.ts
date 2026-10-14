@@ -3,6 +3,7 @@
 // domain, or one on the short list of sites that share one sign-in), never on a look-alike.
 import type { OtpEntry } from "@marobotic/otp";
 import { hostOf, matchTotp } from "./passwords.ts";
+import { siteOf } from "./icons.ts";
 
 // Second-level suffixes where the registrable domain is three labels ("bbc.co.uk"), not two. Not the
 // whole Public Suffix List, but every one a person here is likely to sign in under.
@@ -69,8 +70,17 @@ type LoginLike = { name: string; urls: string[]; username: string; totpId?: stri
 export function loginsFor<T extends { data: LoginLike }>(pageUrl: string, logins: T[]): T[] {
   const host = hostOf(pageUrl);
   const exact = (l: T) => l.data.urls.some((u) => hostOf(u) === host);
-  return logins.filter((l) => l.data.urls.some((u) => sameSite(u, pageUrl))).sort((a, b) => Number(exact(b)) - Number(exact(a)));
+  return logins.filter((l) => l.data.urls.some((u) => sameSite(u, pageUrl)) || (!l.data.urls.length && namedFor(l.data.name, pageUrl)))
+    .sort((a, b) => Number(exact(b)) - Number(exact(a)));
 }
+
+/** A login saved with no address (some exports leave it out) belongs to the site its name names, exactly:
+ *  "Discord - Talk, Play" is discord.com, never discord.xyz or a look-alike. */
+export function namedSite(name: string): string {
+  const site = siteOf({ name });
+  return site ? siteKey(site) : "";
+}
+const namedFor = (name: string, pageUrl: string) => { const s = namedSite(name); return !!s && s === siteKey(pageUrl); };
 
 const word = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 

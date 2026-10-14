@@ -33,6 +33,8 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     var focused: AutofillId? = null
     val pkg: String = structure.activityComponent.packageName
     var usernameValue = ""
+    /** The sign-in name field asks for an email ("Email or Phone Number", type=email, an email keyboard). */
+    var usernameIsEmail = false
     var passwordValue = ""
     private var lastText: AssistStructure.ViewNode? = null
     private var passwordIsCurrent = false
@@ -91,7 +93,12 @@ class Fields(structure: AssistStructure, ownPackage: String) {
             hints.any { it in setOf("username", "emailaddress", "email", "phone", "phonenumber") } || htmlType == "email" || "username" in ac || ac.startsWith("email") ||
                 (cls == InputType.TYPE_CLASS_TEXT && variation in setOf(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)) ||
                 Regex("user|e-?mail|login|account|identifier").containsMatchIn(words) -> {
-                if (username == null) { username = n.autofillId; usernameValue = value }
+                if (username == null) {
+                    username = n.autofillId; usernameValue = value
+                    usernameIsEmail = hints.any { "email" in it } || htmlType == "email" || ac.startsWith("email") ||
+                        variation in setOf(InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS) ||
+                        Regex("e-?mail").containsMatchIn(words)
+                }
             }
             else -> lastText = n
         }
@@ -188,9 +195,10 @@ class VaultAutofillService : AutofillService() {
                 return Dataset.Builder(row(ctx, "2FA code", "Vault")).setValue(id, AutofillValue.forText(Totp.code(otp))).build()
             }
             val l = index.logins.firstOrNull { it.id == ref } ?: return null
-            val d = Dataset.Builder(row(ctx, l.username.ifBlank { l.name }, "${l.name} · Vault"))
+            val d = Dataset.Builder(row(ctx, l.who, "${l.name} · Vault"))
             var any = false
-            f.username?.let { if (l.username.isNotEmpty()) { d.setValue(it, AutofillValue.forText(l.username)); any = true } }
+            val name = l.signInName(f.usernameIsEmail)
+            f.username?.let { if (name.isNotEmpty()) { d.setValue(it, AutofillValue.forText(name)); any = true } }
             f.password?.let { d.setValue(it, AutofillValue.forText(l.password)); any = true }
             if (!any) return null
             return d.build()
@@ -210,30 +218,43 @@ class VaultAutofillService : AutofillService() {
             var any = false
             val loginField = f.password ?: f.username
             val open = AutofillStore.index
-            val list = open ?: AutofillStore.hints(ctx)
+            val hints = if (open == null) AutofillStore.hints(ctx) else null
+            val signUpOnly = f.newPasswords.isNotEmpty() && f.password == null && f.otp == null
+            // Locked: one "Unlock Vault" entry, only where Vault has something for this screen (the hints,
+            // no secrets, tell). The fingerprint or screen lock opens the sealed list, and Android then
+            // shows the real suggestions. A sign-up form needs nothing unlocked: its strong password shows at once.
+            val list = if (open == null && signUpOnly) hints ?: AutofillStore.Index(emptyList(), emptyList(), emptySet(), emptyMap(), emptyList()) else open
             if (list == null) {
-                // Never opened on this phone yet: one entry that opens Vault; the fields fill once it's unlocked.
-                val sender = unlockIntent(ctx, "all", "")
-                val locked = if (Build.VERSION.SDK_INT >= 30) Inline.presentation(ctx, inline, 0, "Vault is locked", "Tap to unlock") else null
-                if (locked != null && Build.VERSION.SDK_INT >= 30) b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, "Vault is locked", "Tap to unlock and fill"), locked)
-                else b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, "Vault is locked", "Tap to unlock and fill"))
-                any = true
+                val worth = hints == null || with(AutofillStore) {
+                    hints.loginsFor(f.webDomain, f.pkg).isNotEmpty() || (f.otp != null && hints.codesFor(f.webDomain, f.pkg, hints.loginsFor(f.webDomain, f.pkg)).isNotEmpty())
+                }
+                if (worth) {
+                    val sender = unlockIntent(ctx, "all", "")
+                    val title = "Unlock Vault"
+                    val sub = "Fingerprint or screen lock, then pick a login"
+                    val chip = if (Build.VERSION.SDK_INT >= 30) Inline.presentation(ctx, inline, 0, title, sub) else null
+                    if (chip != null && Build.VERSION.SDK_INT >= 30) b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, title, sub), chip)
+                    else b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, title, sub))
+                    any = true
+                }
             } else with(AutofillStore) {
                 var logins = list.loginsFor(f.webDomain, f.pkg)
                 // The password field of a form whose username is already there: that account only.
                 val typedUser = f.usernameValue.trim().lowercase()
                 if (typedUser.isNotEmpty() && f.focused != null && f.focused != f.username) {
-                    val exact = logins.filter { it.username.lowercase() == typedUser }
-                    logins = exact.ifEmpty { logins.filter { it.username.lowercase().startsWith(typedUser) } }
+                    val exact = logins.filter { it.username.lowercase() == typedUser || it.email.lowercase() == typedUser }
+                    logins = exact.ifEmpty { logins.filter { it.username.lowercase().startsWith(typedUser) || it.email.lowercase().startsWith(typedUser) } }
                 }
                 if (loginField != null && f.focused != f.otp) for (l in logins.take(30)) {
-                    val d = chips.dataset(l.username.ifBlank { l.name }, if (open != null) "${l.name} · Vault" else "${l.name} · Vault (tap to unlock)")
+                    val sub = listOfNotNull(l.username.takeIf { it.isNotBlank() && l.email.isNotBlank() }, l.name).joinToString(" · ")
+                    val d = chips.dataset(l.who, if (open != null) "$sub · Vault" else "$sub · Vault (tap to unlock)")
+                    val name = l.signInName(f.usernameIsEmail)
                     if (open != null) {
-                        f.username?.let { if (l.username.isNotEmpty()) d.setValue(it, AutofillValue.forText(l.username)) }
+                        f.username?.let { if (name.isNotEmpty()) d.setValue(it, AutofillValue.forText(name)) }
                         f.password?.let { d.setValue(it, AutofillValue.forText(l.password)) }
                     } else {
                         // The username is no secret: it shows (and filters as you type); the rest comes after the unlock.
-                        f.username?.let { d.setValue(it, if (l.username.isNotEmpty()) AutofillValue.forText(l.username) else null) }
+                        f.username?.let { d.setValue(it, if (name.isNotEmpty()) AutofillValue.forText(name) else null) }
                         f.password?.let { d.setValue(it, null) }
                         d.setAuthentication(unlockIntent(ctx, "login", l.id))
                     }

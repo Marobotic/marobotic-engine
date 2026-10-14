@@ -108,7 +108,7 @@ class PasskeyActivity : Activity() {
         if (kind == "getPassword") {
             val l = index.logins.firstOrNull { it.id == id } ?: error("not found")
             req.credentialOptions.firstOrNull { it is GetPasswordOption } ?: error("no password asked")
-            PendingIntentHandler.setGetCredentialResponse(out, GetCredentialResponse(PasswordCredential(l.username, l.password)))
+            PendingIntentHandler.setGetCredentialResponse(out, GetCredentialResponse(PasswordCredential(l.email.ifBlank { l.username }, l.password)))
             return
         }
         val option = req.credentialOptions.filterIsInstance<GetPublicKeyCredentialOption>().firstOrNull() ?: error("no passkey asked")

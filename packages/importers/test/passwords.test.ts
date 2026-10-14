@@ -11,7 +11,7 @@ test("Chrome / Brave / Edge export", () => {
   const r = importPasswordCsv("name,url,username,password,note\ngithub.com,https://github.com/login,mi@marobotic.dev,p@ss,\n,https://www.square-enix.com/,maro,\"pw,with,commas\",ff14\n");
   assert.equal(r.source, "Chrome, Brave or Edge");
   assert.equal(r.logins.length, 2);
-  assert.deepEqual(r.logins[0], { name: "github.com", urls: ["https://github.com/login"], username: "mi@marobotic.dev", password: "p@ss", notes: "", totp: undefined });
+  assert.deepEqual(r.logins[0], { name: "github.com", urls: ["https://github.com/login"], username: "", email: "mi@marobotic.dev", password: "p@ss", notes: "", totp: undefined });
   assert.equal(r.logins[1]!.name, "square-enix.com");          // no name: the site's host
   assert.equal(r.logins[1]!.password, "pw,with,commas");
 });
@@ -44,4 +44,12 @@ test("a file without a password column says what it saw", () => {
   const r = importPasswordCsv("a,b\n1,2\n");
   assert.equal(r.logins.length, 0);
   assert.match(r.skipped[0]!, /no password column \(columns: a, b\)/);
+});
+
+test("Proton Pass export: email and username kept apart; an email in the username column is the email", () => {
+  const r = importPasswordCsv("type,name,url,autofillUrls,email,username,password,note,totp,createTime,modifyTime,vault\n" +
+    "login,Discord,https://discord.com,,me@marobot.online,,pw1,,,1,2,Personal\n" +
+    "login,Discord alt,https://discord.com,,alt@x.dev,moaka0,pw2,,,1,2,Personal\n" +
+    "login,Site,https://s.com,,,someone@x.dev,pw3,,,1,2,Personal\n");
+  assert.deepEqual(r.logins.map((l) => [l.email, l.username]), [["me@marobot.online", ""], ["alt@x.dev", "moaka0"], ["someone@x.dev", ""]]);
 });

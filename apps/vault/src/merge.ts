@@ -21,7 +21,7 @@ export function mergeCodesIntoLogins(vault: Vault): Map<string, string> {
     if (l.data.otp) continue;
     const linked = l.data.totpId ? codes.find((c) => c.id === l.data.totpId) : undefined;
     const matched = linked ?? matchTotp(l.data, codes.map((c) => ({ otp: c.data.otp, c })))?.c;
-    if (matched && (linked || sameAccount(matched.data.otp.account, l.data.username))) claims.set(matched.id, [...(claims.get(matched.id) ?? []), l]);
+    if (matched && (linked || sameAccount(matched.data.otp.account, l.data.username) || (!!l.data.email && sameAccount(matched.data.otp.account, l.data.email)))) claims.set(matched.id, [...(claims.get(matched.id) ?? []), l]);
   }
   const moved = new Map<string, string>();
   for (const [codeId, ls] of claims) {

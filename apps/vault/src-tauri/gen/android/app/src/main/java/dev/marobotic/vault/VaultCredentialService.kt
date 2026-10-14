@@ -59,7 +59,7 @@ class VaultCredentialService : CredentialProviderService() {
                 }
                 is BeginGetPasswordOption -> with(AutofillStore) {
                     for (l in index.loginsFor(null, pkg).filter { it.password.isNotEmpty() }.take(6))
-                        b.addCredentialEntry(PasswordCredentialEntry.Builder(ctx, l.username.ifBlank { l.name }, intent(ctx, "getPassword", l.id), option)
+                        b.addCredentialEntry(PasswordCredentialEntry.Builder(ctx, l.who, intent(ctx, "getPassword", l.id), option)
                             .setDisplayName(l.name).build())
                 }
                 else -> {}

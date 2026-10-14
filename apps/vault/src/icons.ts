@@ -24,7 +24,8 @@ function mainSite(host: string): string {
 export function siteOf(entry: { urls?: string[]; issuer?: string; name?: string }): string {
   const url = entry.urls?.find(Boolean);
   if (url) return mainSite(hostOf(url));
-  const name = (entry.issuer || entry.name || "").trim().toLowerCase();
+  // A page title saved as the name ("Discord - Talk, Play, Hang Out"): the site is the part before the dash.
+  const name = (entry.issuer || entry.name || "").split(/\s+[-–—|:·]\s+/)[0]!.trim().toLowerCase();
   if (!name) return "";
   if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name)) return mainSite(name.replace(/^www\./, ""));   // already a domain
   const key = name.replace(/[^a-z0-9]/g, "");

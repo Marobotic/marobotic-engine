@@ -8,8 +8,8 @@ import type { OtpEntry } from "@marobotic/otp";
 
 /** A 2FA code on its own. `inLogin` marks a login's own code shown as a code (never stored). */
 export type TotpItem = { type: "totp"; otp: OtpEntry; label?: string; notes?: string; favorite?: boolean; inLogin?: boolean };
-/** A login: username, password and its own one-time code. `totpId` is the older link to a separate code. */
-export type LoginItem = { type: "login"; name: string; urls: string[]; username: string; password: string; otp?: OtpEntry; totpId?: string; notes?: string; favorite?: boolean };
+/** A login: email and/or username, password and its own one-time code. `totpId` is the older link to a separate code. */
+export type LoginItem = { type: "login"; name: string; urls: string[]; username: string; email?: string; password: string; otp?: OtpEntry; totpId?: string; notes?: string; favorite?: boolean };
 export type PasskeyItem = {
   type: "passkey"; rpId: string; credentialId: string; userHandle: string; username: string; privateKeyPkcs8: string; counter: number;
   displayName?: string; rpName?: string; created?: number; favorite?: boolean;

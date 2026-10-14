@@ -19,7 +19,12 @@ import javax.crypto.spec.SecretKeySpec
  */
 object AutofillStore {
     class Otp(val secret: String, val digits: Int, val period: Int, val algorithm: String)
-    class Login(val id: String, val name: String, val username: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?, val hasOtp: Boolean)
+    class Login(val id: String, val name: String, val username: String, val email: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?, val hasOtp: Boolean) {
+        /** What the list shows big: the email when there is one (most sites sign in with it), else the username. */
+        val who get() = email.ifBlank { username }.ifBlank { name }
+        /** What goes into the sign-in name field: an email field gets the email, a username field the username. */
+        fun signInName(emailField: Boolean) = if (emailField) email.ifBlank { username } else username.ifBlank { email }
+    }
     class Code(val id: String, val issuer: String, val account: String, val words: List<String>, val otp: Otp?)
     class Passkey(val id: String, val rpId: String, val credentialId: String, val userHandle: String, val username: String, val displayName: String, val privateKeyPkcs8: String)
     class Index(val logins: List<Login>, val codes: List<Code>, val multi: Set<String>, val groups: Map<String, String>, val passkeys: List<Passkey>)
@@ -69,7 +74,7 @@ object AutofillStore {
         val o = JSONObject(json)
         val hints = JSONObject().put("rules", o.optJSONObject("rules") ?: JSONObject())
             .put("logins", JSONArray((o.optJSONArray("logins")?.objects() ?: emptyList()).map { l ->
-                JSONObject().put("id", l.getString("id")).put("name", l.optString("name")).put("username", l.optString("username"))
+                JSONObject().put("id", l.getString("id")).put("name", l.optString("name")).put("username", l.optString("username")).put("email", l.optString("email"))
                     .put("hosts", l.optJSONArray("hosts") ?: JSONArray()).put("words", l.optJSONArray("words") ?: JSONArray()).put("hasOtp", l.has("otp"))
             }))
             .put("codes", JSONArray((o.optJSONArray("codes")?.objects() ?: emptyList()).map { c ->
@@ -95,7 +100,7 @@ object AutofillStore {
         rules?.optJSONArray("groups")?.let { gs -> for (i in 0 until gs.length()) gs.getJSONArray(i).strings().let { g -> g.forEach { groups[it] = g[0] } } }
         val logins = o.optJSONArray("logins")?.objects()?.map {
             val otp = if (secrets) it.optJSONObject("otp")?.toOtp() else null
-            Login(it.getString("id"), it.optString("name"), it.optString("username"), if (secrets) it.optString("password") else "",
+            Login(it.getString("id"), it.optString("name"), it.optString("username"), it.optString("email"), if (secrets) it.optString("password") else "",
                 it.optJSONArray("hosts")?.strings() ?: emptyList(), it.optJSONArray("words")?.strings() ?: emptyList(), otp, otp != null || it.optBoolean("hasOtp"))
         } ?: emptyList()
         val codes = o.optJSONArray("codes")?.objects()?.map {
@@ -159,7 +164,7 @@ object AutofillStore {
     /** One-time codes: those of the matching logins first, then 2FA entries named after the site or app. */
     fun Index.codesFor(domain: String?, pkg: String, matched: List<Login>): List<CodeHit> {
         val out = LinkedHashMap<String, CodeHit>()
-        matched.filter { it.hasOtp }.forEach { l -> out["login:${l.id}"] = CodeHit("login:${l.id}", l.username.ifBlank { l.name }, l.otp) }
+        matched.filter { it.hasOtp }.forEach { l -> out["login:${l.id}"] = CodeHit("login:${l.id}", l.who, l.otp) }
         val words = if (!domain.isNullOrBlank()) listOf(word(siteKey(domain).substringBefore('.'))) else packageWords(pkg)
         codes.filter { c -> out.keys.none { it == "login:${c.id}" } && c.words.any { w -> words.any { it == w || (it.length > 3 && w.contains(it)) } } }
             .forEach { c -> out.putIfAbsent("code:${c.id}", CodeHit("code:${c.id}", listOf(c.issuer, c.account).filter { it.isNotBlank() }.joinToString(" · "), c.otp)) }

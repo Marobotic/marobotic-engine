@@ -73,11 +73,15 @@ function setValue(el: HTMLInputElement, value: string) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function fillLogin(username: string, password: string, anchor?: HTMLInputElement) {
+/** A sign-in name field that asks for an email ("Email or Phone Number", type=email). */
+const wantsEmail = (el: HTMLInputElement) => el.type === "email" || /e-?mail/i.test(attrs(el));
+
+function fillLogin(username: string, password: string, anchor?: HTMLInputElement, email = "") {
   const scope = anchor ? scopeOf(anchor) : document;
   const pw = inputs(scope).find((i) => i.type === "password");
   const user = anchor && kindOf(anchor) === "username" ? anchor : userFieldFor(scope, pw);
-  if (user && username) setValue(user, username);
+  const name = user && wantsEmail(user) ? email || username : username || email;
+  if (user && name) setValue(user, name);
   if (pw && password) setValue(pw, password);
   (pw ?? user)?.focus();
 }
@@ -198,7 +202,7 @@ async function matches(fresh = false): Promise<Matches> {
 let prefs: Settings | null = null;
 const settings = async () => (prefs ??= await send<Settings>({ t: "settings" }).catch(() => null)) ?? ({ suggest: true, suggestCodes: true, suggestPasswords: true } as Settings);
 
-const loginHtml = (l: LoginHit) => `<div class="txt"><b>${esc(l.username || l.name)}</b><span>${esc(l.name)}${l.site ? ` · ${esc(l.site)}` : ""}</span></div>`;
+const loginHtml = (l: LoginHit) => `<div class="txt"><b>${esc(l.email || l.username || l.name)}</b><span>${l.email && l.username ? `${esc(l.username)} · ` : ""}${esc(l.name)}${l.site ? ` · ${esc(l.site)}` : ""}</span></div>`;
 const passkeyHtml = (p: PasskeyHit) => `<div class="txt"><b>${esc(p.username || p.displayName)}</b><span>Passkey · ${esc(p.rpId)}</span></div><div class="tag">PASSKEY</div>`;
 const codeHtml = (c: CodeHit) => `<div class="txt"><b>${esc(c.account || c.issuer)}</b><span>${esc(c.issuer)}</span></div>
   <div class="code ${c.remaining <= 5 ? "low" : ""}">${esc(c.code.length === 6 ? `${c.code.slice(0, 3)} ${c.code.slice(3)}` : c.code)}</div>
@@ -213,13 +217,13 @@ function fitting(field: HTMLInputElement, kind: Kind, logins: LoginHit[]): Login
   const typed = field.value.trim().toLowerCase();
   if (kind === "username") {
     if (!typed) return logins;
-    return logins.filter((l) => { const u = l.username.toLowerCase(); return u !== typed && (u.startsWith(typed) || u.includes(typed) || l.name.toLowerCase().startsWith(typed)); });
+    return logins.filter((l) => { const u = `${l.email} ${l.username}`.toLowerCase(); return l.email.toLowerCase() !== typed && l.username.toLowerCase() !== typed && (u.includes(typed) || l.name.toLowerCase().startsWith(typed)); });
   }
   if (typed) return [];                                         // a password is already there
   const user = userFieldFor(scopeOf(field), field)?.value.trim().toLowerCase() ?? "";
   if (!user) return logins;
-  const exact = logins.filter((l) => l.username.toLowerCase() === user);
-  return exact.length ? exact : logins.filter((l) => l.username.toLowerCase().startsWith(user));
+  const exact = logins.filter((l) => l.username.toLowerCase() === user || l.email.toLowerCase() === user);
+  return exact.length ? exact : logins.filter((l) => l.username.toLowerCase().startsWith(user) || l.email.toLowerCase().startsWith(user));
 }
 
 /** Right after Vault fills a field (or the list is dismissed), focus moving around doesn't reopen it. */
@@ -267,10 +271,10 @@ async function offerFor(field: HTMLInputElement, why: "focus" | "click" | "input
 
 async function fillFrom(id: string, field?: HTMLInputElement) {
   quiet();
-  const r = await send<{ username?: string; password?: string; error?: string }>({ t: "fill", id });
+  const r = await send<{ username?: string; email?: string; password?: string; error?: string }>({ t: "fill", id });
   if (r.error) return;
   quiet();
-  fillLogin(r.username ?? "", r.password ?? "", field);
+  fillLogin(r.username ?? "", r.password ?? "", field, r.email ?? "");
 }
 
 document.addEventListener("focusin", (e) => { const t = e.target; if (t instanceof HTMLInputElement && t !== boxFor) { if (dismissed !== t) dismissed = null; void offerFor(t, "focus"); } }, true);
@@ -361,7 +365,7 @@ chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>)
     quiet();
     const focused = document.activeElement instanceof HTMLInputElement ? document.activeElement : undefined;
     if (focused && kindOf(focused) === "otp" && m.code) fillCode(m.code, focused);
-    else fillLogin(m.username ?? "", m.password ?? "", focused && kindOf(focused) ? focused : undefined);
+    else fillLogin(m.username ?? "", m.password ?? "", focused && kindOf(focused) ? focused : undefined, m.email ?? "");
   }
   if (m.t === "fillBest") void fillBest();
 });
