@@ -47,8 +47,13 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     val any get() = username != null || password != null || newPasswords.isNotEmpty() || otp != null
     val ids get() = listOfNotNull(username, password, otp).plus(newPasswords).distinct()
 
+    /** What was seen, for logcat (tag VaultAutofill): field kinds and hints, never values. */
+    val seen = StringBuilder()
+
     private fun visit(n: AssistStructure.ViewNode) {
         n.webDomain?.takeIf { it.isNotBlank() && webDomain == null }?.let { webDomain = it }
+        if (n.autofillId != null && (n.className?.contains("EditText") == true || n.htmlInfo?.tag.equals("input", true) || n.autofillHints != null))
+            seen.append("\n  ${n.className?.substringAfterLast('.')} type=${n.autofillType} vis=${n.visibility} input=0x${Integer.toHexString(n.inputType)} hints=${n.autofillHints?.joinToString()} id=${n.idEntry} hint=${n.hint} html=${n.htmlInfo?.attributes?.joinToString { "${it.first}=${it.second}" }?.take(160)}")
         if (n.autofillId != null && n.autofillType == View.AUTOFILL_TYPE_TEXT && n.visibility == View.VISIBLE) {
             if (n.isFocused) focused = n.autofillId
             classify(n)
@@ -97,9 +102,11 @@ class VaultAutofillService : AutofillService() {
     override fun onFillRequest(request: FillRequest, cancel: CancellationSignal, callback: FillCallback) {
         val structure = request.fillContexts.lastOrNull()?.structure ?: return callback.onSuccess(null)
         val fields = Fields(structure, packageName)
-        if (fields.own || !fields.any) return callback.onSuccess(null)
         val inline = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
-        callback.onSuccess(respond(this, fields, inline))
+        val response = if (fields.own || !fields.any) null else respond(this, fields, inline)
+        android.util.Log.i("VaultAutofill", "fill ${fields.pkg} web=${fields.webDomain} user=${fields.username != null} pw=${fields.password != null} new=${fields.newPasswords.size} otp=${fields.otp != null} " +
+            "locked=${AutofillStore.index == null} logins=${AutofillStore.index?.let { with(AutofillStore) { it.loginsFor(fields.webDomain, fields.pkg).size } }} answered=${response != null} inline=${inline != null}${fields.seen}")
+        callback.onSuccess(response)
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
