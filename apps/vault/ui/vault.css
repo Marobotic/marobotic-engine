@@ -138,3 +138,7 @@ details.more summary:hover { color: var(--fg); }
   .settings .set { flex-wrap: wrap; }
   .modal .content { padding: 10px 14px 16px; }
 }
+
+/* a login's one-time code in its editor */
+.otpnow { font: 700 18px var(--mono); letter-spacing: 2px; }
+.otpbox .otpadd { display: grid; gap: 6px; }

@@ -106,7 +106,7 @@ async function fill() {
   if (r.locked) { st.state = "locked"; return signInScreen(); }
   if (r.site) $("#siteName").textContent = r.site;
   let items = r.items ?? [];
-  if (view.tab === "all" && view.kind !== "all") items = items.filter((i) => i.kind === view.kind);
+  if (view.tab === "all" && view.kind !== "all") items = items.filter((i) => i.kind === view.kind || (view.kind === "totp" && i.code));
   const list = $("#list");
   if (!list) return;
   if (!items.length) {
@@ -117,7 +117,7 @@ async function fill() {
   }
   const out: HTMLElement[] = [];
   for (const [k, label] of [["login", "Logins"], ["totp", "2FA codes"], ["passkey", "Passkeys"]] as const) {
-    const of = items.filter((i) => i.kind === k);
+    const of = items.filter((i) => (view.tab === "all" && view.kind === "totp" ? k === "totp" : i.kind === k));
     if (!of.length) continue;
     if (onSite || view.kind === "all") out.push(h(`<div class="group">${label}</div>`));
     for (const i of of) out.push(rowOf(i, onSite));
@@ -132,7 +132,7 @@ function rowOf(i: Summary, onSite: boolean): HTMLElement {
   const row = h(`<div class="row" title="${i.kind === "totp" ? "Copy the code" : "Details"}">
       <span class="tileslot"></span>
       <div class="txt"><b>${i.favorite ? `<span class="pin">&#xf08d;</span>` : ""}${esc(i.title)}</b><span>${esc(i.sub || " ")}</span></div>
-      ${i.kind === "totp" ? `<span class="otp ${low}">${esc(group(i.code!))}</span><span class="ring ${low}" data-left="${i.remaining}" data-period="${i.period}" style="--p:${(i.remaining! / i.period!) * 100}"></span>` : ""}
+      ${i.code ? `<span class="otp ${low}" data-otp title="Copy the code">${esc(group(i.code!))}</span><span class="ring ${low}" data-left="${i.remaining}" data-period="${i.period}" style="--p:${(i.remaining! / i.period!) * 100}"></span>` : ""}
       ${i.kind === "passkey" ? `<span class="kind passkey">PASSKEY</span>` : ""}
       ${i.kind === "login" && onSite ? `<button data-fill>Fill</button>` : ""}
       ${i.kind === "login" ? `<button class="icon" data-copy title="Copy password">&#xf0c5;</button>` : ""}
@@ -140,7 +140,7 @@ function rowOf(i: Summary, onSite: boolean): HTMLElement {
   row.querySelector(".tileslot")!.replaceWith(entryIcon(i.title, i.site));
   row.onclick = (e) => {
     if ((e.target as HTMLElement).closest("button")) return;
-    if (i.kind === "totp") return void copy(i.code!, "Code");
+    if (i.kind === "totp" || (e.target as HTMLElement).closest("[data-otp]")) return void copy(i.code!, "Code");
     void detailScreen(i.id);
   };
   row.querySelector<HTMLElement>("[data-fill]")?.addEventListener("click", async () => {
@@ -255,6 +255,9 @@ async function editScreen(d: Extract<Detail, { kind: "login" }> | null) {
       <label>Username or email</label><input id="user" value="${esc(d?.username ?? "")}" autocomplete="off">
       <label>Password</label>
       <div class="pwrow"><input id="pass" type="password" value="${esc(d?.password ?? "")}" autocomplete="new-password"><button type="button" class="icon" id="eye" title="Show">&#xf06e;</button><button type="button" id="gen" title="Make a strong password">&#xf021; Generate</button></div>
+      <label>One-time code (2FA)</label>
+      ${d?.code ? `<div class="pwrow"><input value="${esc(`${d.code.issuer} · ${d.code.account}`)}" disabled><button type="button" id="rmOtp">Remove</button></div>` : ""}
+      <input id="otpKey" placeholder="${d?.code ? "Replace with a new setup key or link" : "Setup key (GHBE AHFH ...) or otpauth:// link"}" autocomplete="off" spellcheck="false">
       <label>Website</label><input id="url" value="${esc(d?.urls.join(", ") ?? host)}" placeholder="example.com">
       <label>Notes</label><textarea id="notes">${esc(d?.notes ?? "")}</textarea>
       <div class="err" id="err"></div>
@@ -265,10 +268,13 @@ async function editScreen(d: Extract<Detail, { kind: "login" }> | null) {
   $("#eye").onclick = () => (pass.type = pass.type === "password" ? "text" : "password");
   $("#gen").onclick = async () => { pass.value = (await send<{ password: string }>({ t: "generate" })).password; pass.type = "text"; };
   $<HTMLInputElement>("#name").focus();
+  let removeOtp = false;
+  $("#rmOtp")?.addEventListener("click", (e) => { removeOtp = true; (e.currentTarget as HTMLElement).parentElement!.remove(); });
   $("#save").onclick = async () => {
     const login: LoginInput = {
       ...(d ? { id: d.id } : {}), name: $<HTMLInputElement>("#name").value, username: $<HTMLInputElement>("#user").value, password: pass.value,
       urls: $<HTMLInputElement>("#url").value.split(/[\s,]+/).filter(Boolean), notes: $<HTMLTextAreaElement>("#notes").value,
+      otpKey: $<HTMLInputElement>("#otpKey").value, removeOtp,
     };
     if (!login.name.trim() && !login.urls.length) return void ($("#err").textContent = "Give it a title or a website.");
     const r = await send<{ ok?: boolean; error?: string }>({ t: "saveLogin", login });
@@ -302,7 +308,7 @@ async function settingsScreen() {
       ${sw("offerSave", "Offer to save logins", "After you sign in with a login Vault doesn't have yet, or a changed password.")}
       ${sw("passkeys", "Passkeys in Vault", "Save new passkeys in Vault and sign in with them, on every device. Off: the browser handles passkeys.")}
       <div class="group">Browser</div>
-      ${sw("takeover", "Replace the browser's password manager", "Turns off the browser's own \"Save password?\". Passwords it already has: export them as a .csv, import them in the Vault app, then delete them from the browser.")}
+      ${sw("takeover", "Replace the browser's password manager", "Turns off the browser's own \"Save password?\" and its form autofill (typed names, addresses, cards). Passwords the browser saved before: export them as a .csv, import them in the Vault app, then delete them from the browser.")}
       <div class="set"><div><b>Keyboard shortcut</b><span>Ctrl+Shift+L fills the best login, or the 2FA code in a code field.</span></div><button id="keys">Change</button></div>
       <div class="group">Never save on</div>
       ${sites.length ? sites.map((x) => `<div class="site"><span>${esc(x)}</span><button class="icon" data-unnever="${esc(x)}" title="Ask again">&#xf00d;</button></div>`).join("") : `<div class="site"><span>No sites.</span></div>`}

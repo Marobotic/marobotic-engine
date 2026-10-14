@@ -7,12 +7,14 @@
 // the worker can be restarted without asking again). The sealed copy is kept in local storage so the
 // extension still opens offline. Nothing readable is ever written to disk.
 import { init, fromBase64, toBase64 } from "@marobotic/crypto";
-import { totp, type OtpEntry } from "@marobotic/otp";
+import { totp, normalizeEntry, base32Decode, type OtpEntry } from "@marobotic/otp";
+import { importText } from "@marobotic/importers";
 import { Vault, type VaultFile, type Item, type LoginItem, type TotpItem, type PasskeyItem } from "../../vault/src/vault.ts";
 import { codesFor, fillableUrl, loginsFor, siteKey } from "../../vault/src/domains.ts";
 import { generatePassword, hostOf, matchTotp } from "../../vault/src/passwords.ts";
 import { siteOf } from "../../vault/src/icons.ts";
 import { createPasskey, passkeysFor, rpIdFor, signIn as passkeySignIn, b64url, fromB64url } from "../../vault/src/passkeys.ts";
+import { allCodes, mergeCodesIntoLogins } from "../../vault/src/merge.ts";
 import * as account from "../../vault/ui/account.ts";
 import { DEFAULTS, type CodeHit, type Detail, type LoginInput, type Msg, type PkCreate, type PkGet, type Settings, type State, type Summary } from "./messages.ts";
 
@@ -80,6 +82,7 @@ async function signIn(email: string, password: string): Promise<void> {
 }
 
 async function opened(email: string) {
+  if (mergeCodesIntoLogins(vault!).size) void sync();   // one entry per account: codes join their logins
   await local.set({ file: vault!.toFile(), email });
   await remember();
 }
@@ -102,7 +105,7 @@ function sync(): Promise<void> {
   return (syncing ??= (async () => {
     try {
       const remote = await account.fetchVault(session!);
-      if (remote && remote.rev !== rev && vault) { vault.merge(remote.file.items); rev = remote.rev; }
+      if (remote && remote.rev !== rev && vault) { vault.merge(remote.file.items); rev = remote.rev; mergeCodesIntoLogins(vault); }
       for (let i = 0; i < 3 && vault && session; i++) {
         const r = await account.pushVault(session, rev, vault.toFile());
         if ("rev" in r) { rev = r.rev; synced = "synced"; break; }
@@ -133,16 +136,23 @@ chrome.alarms.onAlarm.addListener(async () => {
 const touch = () => mem.set({ active: Date.now() });
 
 // ------------------------------------------------------------------ the browser's own password manager
+/** While Vault is the password manager, the browser's own "Save password?" and its form autofill
+ *  (typed names and emails, addresses, cards) are off, so only Vault suggests anything in a field. */
 async function applyTakeover() {
   const { takeover } = await settings();
-  try { await chrome.privacy.services.passwordSavingEnabled.set({ value: !takeover }); } catch { /* managed by policy */ }
+  const s = chrome.privacy.services;
+  for (const setting of [s.passwordSavingEnabled, s.autofillAddressEnabled, s.autofillCreditCardEnabled]) {
+    try { await setting.set({ value: !takeover }); } catch { /* missing in this browser, or managed by policy */ }
+  }
 }
 chrome.runtime.onInstalled.addListener(() => void applyTakeover());
 chrome.runtime.onStartup.addListener(() => void applyTakeover());
 
 // ------------------------------------------------------------------ reading the vault
 const logins = () => (vault?.list("login") ?? []) as LoginRow[];
-const codes = () => (vault?.list("totp") ?? []) as TotpRow[];
+/** Every one-time code: 2FA entries and each login's own code (a row with the login's id). */
+const codes = () => (vault ? allCodes(vault) : []) as TotpRow[];
+const standaloneCodes = () => (vault?.list("totp") ?? []) as TotpRow[];
 const passkeys = () => (vault?.list("passkey") ?? []) as PasskeyRow[];
 const codeName = (c: TotpRow) => c.data.label || c.data.otp.issuer || "2FA";
 const passkeyOn = (host: string) => (p: PasskeyRow) => host === p.data.rpId || host.endsWith(`.${p.data.rpId}`);
@@ -155,7 +165,8 @@ async function fresh(otp: OtpEntry) {
   return r;
 }
 const codeHit = async (c: TotpRow): Promise<CodeHit> => ({ id: c.id, issuer: codeName(c), account: c.data.otp.account, period: c.data.otp.period, ...(await fresh(c.data.otp)) });
-const linkedCode = (l: LoginRow) => (l.data.totpId ? codes().find((c) => c.id === l.data.totpId) : undefined) ?? matchTotp(l.data, codes().map((c) => ({ otp: c.data.otp, c })))?.c;
+const linkedCode = (l: LoginRow) => codes().find((c) => c.id === l.id)
+  ?? (l.data.totpId ? codes().find((c) => c.id === l.data.totpId) : undefined) ?? matchTotp(l.data, standaloneCodes().map((c) => ({ otp: c.data.otp, c })))?.c;
 const loginSite = (l: LoginItem) => siteOf({ urls: l.urls, name: l.name });
 
 async function matches(url: string) {
@@ -172,11 +183,14 @@ async function summaries(q: string, siteUrl: string | null): Promise<Summary[]> 
   const needle = q.trim().toLowerCase();
   const hit = (s: string) => !needle || s.toLowerCase().includes(needle);
   const ls = siteUrl ? loginsFor(siteUrl, logins()) : logins();
-  const cs = siteUrl ? codesFor(siteUrl, codes(), logins()) : codes();
+  const cs = (siteUrl ? codesFor(siteUrl, codes(), logins()) : codes()).filter((c) => !c.data.inLogin);
   const ps = siteUrl ? passkeys().filter(passkeyOn(hostOf(siteUrl))) : passkeys();
   const out: Summary[] = [];
-  for (const l of ls) if (hit(`${l.data.name} ${l.data.username} ${l.data.urls.join(" ")}`))
-    out.push({ id: l.id, kind: "login", title: l.data.name, sub: l.data.username, site: loginSite(l.data), favorite: l.data.favorite });
+  for (const l of ls) if (hit(`${l.data.name} ${l.data.username} ${l.data.urls.join(" ")}`)) {
+    const c = l.data.otp ? await fresh(l.data.otp) : undefined;
+    out.push({ id: l.id, kind: "login", title: l.data.name, sub: l.data.username, site: loginSite(l.data), favorite: l.data.favorite,
+      ...(c ? { code: c.code, remaining: c.remaining, period: l.data.otp!.period } : {}) });
+  }
   for (const c of cs) if (hit(`${codeName(c)} ${c.data.otp.account}`)) {
     const r = await fresh(c.data.otp);
     out.push({ id: c.id, kind: "totp", title: codeName(c), sub: c.data.otp.account, site: siteOf({ issuer: c.data.otp.issuer, name: c.data.label }), favorite: c.data.favorite, code: r.code, remaining: r.remaining, period: c.data.otp.period });
@@ -198,10 +212,28 @@ async function detail(id: string): Promise<Detail | { error: string }> {
   return { error: "not shown here" };
 }
 
+/** A setup key ("GHBE AHFH …") or an otpauth:// link, as an OTP entry for this login. */
+function otpFrom(text: string, issuer: string, account: string): OtpEntry {
+  const t = text.trim();
+  if (/^otpauth/i.test(t)) { const r = importText(t); if (!r.entries[0]) throw new Error(r.skipped[0] ?? "that link has no 2FA code"); return r.entries[0]; }
+  const clean = t.toUpperCase().replace(/[\s=-]/g, "");
+  if (/[^A-Z2-7]/.test(clean)) throw new Error("setup keys only use the letters A-Z and the digits 2-7");
+  if (base32Decode(clean).length < 10) throw new Error("that setup key is too short");
+  return normalizeEntry({ issuer, account, secret: clean });
+}
+
 async function saveLogin(input: LoginInput) {
   const data: LoginItem = { type: "login", name: input.name.trim() || hostOf(input.urls[0] ?? "") || "Login", urls: input.urls.filter(Boolean), username: input.username.trim(), password: input.password, notes: input.notes };
-  if (input.id) { const old = vault!.get(input.id); if (old?.data.type !== "login") return { error: "not found" }; vault!.update(input.id, { ...old.data, ...data }); }
-  else vault!.add(data);
+  const old = input.id ? vault!.get(input.id) : undefined;
+  if (input.id && old?.data.type !== "login") return { error: "not found" };
+  let otp = old?.data.type === "login" ? old.data.otp : undefined;
+  if (input.removeOtp) otp = undefined;
+  if (input.otpKey?.trim()) { try { otp = otpFrom(input.otpKey, data.name, data.username); } catch (e) { return { error: `One-time code: ${(e as Error).message}` }; } }
+  if (otp) data.otp = otp;
+  if (old?.data.type === "login") {
+    const { otp: _o, totpId: _t, ...rest } = old.data;
+    vault!.update(old.id, { ...rest, ...data });
+  } else vault!.add(data);
   await save();
   return { ok: true };
 }

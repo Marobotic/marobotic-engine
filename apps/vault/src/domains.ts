@@ -76,10 +76,11 @@ const word = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The 2FA codes for a page: those linked to (or matching) its logins first, then any whose service
  *  name is the site's name ("GitHub" on github.com). */
-export function codesFor<C extends { id: string; data: { otp: OtpEntry } }, L extends { data: LoginLike }>(pageUrl: string, codes: C[], logins: L[]): C[] {
+export function codesFor<C extends { id: string; data: { otp: OtpEntry } }, L extends { id?: string; data: LoginLike }>(pageUrl: string, codes: C[], logins: L[]): C[] {
   const out: C[] = [];
   const add = (c: C | undefined) => { if (c && !out.includes(c)) out.push(c); };
   for (const l of loginsFor(pageUrl, logins)) {
+    if (l.id) add(codes.find((c) => c.id === l.id));   // the login's own code (see allCodes)
     add(l.data.totpId ? codes.find((c) => c.id === l.data.totpId) : undefined);
     add(matchTotp(l.data, codes.map((c) => ({ otp: c.data.otp, c })))?.c);
   }

@@ -25,7 +25,7 @@ export type Detail =
   | { kind: "login"; id: string; name: string; username: string; password: string; urls: string[]; notes: string; site: string; code?: CodeHit; favorite?: boolean }
   | { kind: "totp"; id: string; issuer: string; account: string; site: string; code: CodeHit; favorite?: boolean }
   | { kind: "passkey"; id: string; rpId: string; rpName: string; username: string; displayName: string; created?: number; site: string };
-export type LoginInput = { id?: string; name: string; username: string; password: string; urls: string[]; notes: string };
+export type LoginInput = { id?: string; name: string; username: string; password: string; urls: string[]; notes: string; otpKey?: string; removeOtp?: boolean };
 export type State = { state: "signedOut" | "locked" | "open"; email?: string; synced?: "synced" | "offline" | "signedOut"; settings: Settings };
 
 /** A WebAuthn call from a page, with every binary field as base64url. */

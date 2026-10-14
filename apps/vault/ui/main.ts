@@ -8,6 +8,7 @@ import { ffxivEntries, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
 import { siteOf } from "../src/icons.ts";
 import { MULTI, SAME_SIGN_IN, loginsFor, siteKey } from "../src/domains.ts";
+import { allCodes, mergeCodesIntoLogins } from "../src/merge.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -214,15 +215,18 @@ type LoginRow = Item & { data: LoginItem };
 type PasskeyRow = Item & { data: PasskeyItem };
 const passkeys = () => (vault?.list("passkey") ?? []) as PasskeyRow[];
 
-const otps = () => (vault?.list("totp") ?? []) as TotpRow[];
+/** Every one-time code: 2FA entries, and each login's own code (as a row with the login's id). */
+const otps = () => (vault ? allCodes(vault) : []) as TotpRow[];
+const standaloneCodes = () => (vault?.list("totp") ?? []) as TotpRow[];
 const logins = () => (vault?.list("login") ?? []) as LoginRow[];
 const groupCode = (c: string) => (c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c.length === 8 ? `${c.slice(0, 4)} ${c.slice(4)}` : c);
 const nameOf = (i: TotpRow) => i.data.label || i.data.otp.issuer || i.data.otp.account || "Untitled";
 
-/** The 2FA code for a login: the one it is linked to, else one that matches by site and account. */
+/** A login's one-time code: its own, else (older vaults) the code it is linked to or that matches it. */
 function codeFor(login: LoginItem): OtpEntry | undefined {
+  if (login.otp) return login.otp;
   if (login.totpId) { const it = vault?.get(login.totpId); if (it?.data.type === "totp") return it.data.otp; }
-  return matchTotp(login, otps().map((i) => i.data))?.otp;
+  return matchTotp(login, standaloneCodes().map((i) => i.data))?.otp;
 }
 
 async function copy(text: string, said: string, clearAfter = 0): Promise<boolean> {
@@ -264,10 +268,22 @@ function homeScreen() {
 
 /** Each time the vault opens: Android autofill gets its list, and a link Vault was opened with is offered. */
 async function unlocked() {
+  await mergeCodes();
   refreshAutofill();
   const link = pendingLink ?? (await platform.takeLaunchLink());
   pendingLink = null;
   if (link) offerLink(link);
+}
+
+/** One entry per account: codes that belong to a login move into it (and sync everywhere). */
+async function mergeCodes() {
+  if (!vault) return;
+  const moved = mergeCodesIntoLogins(vault);
+  if (!moved.size) return;
+  if (moved.has(autoXlId)) { autoXlId = moved.get(autoXlId)!; localStorage.setItem("vault.autoXlId", autoXlId); }
+  await save();
+  renderList();
+  toast(`${moved.size} 2FA code${moved.size === 1 ? "" : "s"} joined ${moved.size === 1 ? "its login" : "their logins"}: one entry each now`);
 }
 
 // ------------------------------------------------------------------ settings
@@ -401,7 +417,8 @@ function passkeyRow(i: PasskeyRow): HTMLElement {
 }
 
 async function togglePin(i: LoginRow | TotpRow) {
-  vault!.update(i.id, { ...i.data, favorite: !i.data.favorite });
+  const item = vault!.get(i.id)!;      // a login's own code pins the login
+  vault!.update(i.id, { ...item.data, favorite: !(item.data as LoginItem).favorite } as LoginItem);
   await save();
   renderList();
 }
@@ -431,6 +448,15 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
     if (d.username) copies.push({ label: "Copy username", icon: "&#xf007;", onClick: () => void copy(d.username, `Username copied · ${d.name}`) });
     if (linked) copies.push({ label: "Copy 2FA code", icon: "&#xf023;", onClick: () => void copyCode(i.id, linked, who) });
     openMenu(x, y, [{ title: d.name, items: copies }, { items: [pin, { label: "Edit", icon: "&#xf044;", onClick: () => loginEditor(i as LoginRow) }] }, { items: [del] }]);
+  } else if (i.data.inLogin) {
+    const t = i as TotpRow, owner = vault!.get(t.id) as LoginRow;
+    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] },
+      { items: [pin, { label: "Edit login", icon: "&#xf044;", onClick: () => loginEditor(owner) }] },
+      { items: [{ label: "Remove the code from this login", icon: "&#xf1f8;", danger: true, onClick: async () => {
+        if (!confirm(`Remove the 2FA code from ${owner.data.name}? Make sure you can still sign in another way.`)) return;
+        const { otp: _gone, ...rest } = owner.data;
+        vault!.update(owner.id, rest); await save(); renderList();
+      } }] }]);
   } else {
     const t = i as TotpRow;
     openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] }, { items: [pin] }, { items: [del] }]);
@@ -473,6 +499,8 @@ function loginRow(i: LoginRow): HTMLElement {
 
 /** The site a 2FA code belongs to: a linked login's address when there is one, else its service name. */
 function siteForCode(i: TotpRow): string {
+  const own = i.data.inLogin ? (vault?.get(i.id) as LoginRow | undefined) : undefined;
+  if (own?.data.urls.length) return siteOf({ urls: own.data.urls, name: own.data.name });
   const login = logins().find((l) => l.data.totpId === i.id) ?? logins().find((l) => !l.data.totpId && matchTotp(l.data, [i.data]));
   return siteOf(login?.data.urls.length ? { urls: login.data.urls } : { issuer: i.data.otp.issuer, name: i.data.label });
 }
@@ -515,8 +543,9 @@ async function tick() {
   const now = Date.now();
   for (const row of document.querySelectorAll<HTMLElement>(".code-row")) {
     const item = vault?.get(row.dataset.id!);
-    if (!item || item.data.type !== "totp") continue;
-    paintCode(row, await totp(item.data.otp, now), item.data.otp.period, (copiedUntil.get(row.dataset.id!) ?? 0) > now);
+    const otp = item?.data.type === "totp" ? item.data.otp : item?.data.type === "login" ? item.data.otp : undefined;
+    if (!otp) continue;
+    paintCode(row, await totp(otp, now), otp.period, (copiedUntil.get(row.dataset.id!) ?? 0) > now);
   }
   for (const row of document.querySelectorAll<HTMLElement>(".login[data-login]")) {
     const item = vault?.get(row.dataset.login!);
@@ -538,7 +567,9 @@ function paintCode(row: HTMLElement, r: { code: string; remaining: number }, per
 // ------------------------------------------------------------------ login editor
 function loginEditor(existing: LoginRow | null) {
   const d: LoginItem = existing ? { ...existing.data } : { type: "login", name: "", urls: [], username: "", password: "", notes: "" };
-  const codes = otps();
+  const codes = standaloneCodes();
+  let otp: OtpEntry | undefined = codeFor(d);
+  const fromLink = !d.otp && otp ? (d.totpId ?? standaloneCodes().find((c) => c.data.otp === otp)?.id) : undefined;   // an older separate code
   const back = h(`
     <div class="backdrop">
       <form class="m-modal modal">
@@ -549,8 +580,8 @@ function loginEditor(existing: LoginRow | null) {
           <label class="lab">Username or email</label><input class="m-field" id="user" value="${esc(d.username)}" autocomplete="off">
           <label class="lab">Password</label>
           <div class="pw"><input class="m-field grow" id="pass" type="password" value="${esc(d.password)}" autocomplete="off"><button class="m-btn subtle compact" type="button" id="show"></button><button class="m-btn subtle compact" type="button" id="gen"> Generate</button></div>
-          <label class="lab">2FA code</label>
-          <select class="m-field" id="totp"></select>
+          <label class="lab">One-time code (2FA)</label>
+          <div id="otpBox" class="otpbox"></div>
           <label class="lab">Notes</label><textarea id="notes">${esc(d.notes ?? "")}</textarea>
           <div class="result" id="result"></div>
         </div>
@@ -563,11 +594,32 @@ function loginEditor(existing: LoginRow | null) {
       </form>
     </div>`).firstElementChild as HTMLElement;
   document.body.append(back);
-  const sel = $<HTMLSelectElement>("#totp", back);
-  const auto = codeFor({ ...d, totpId: undefined });
-  sel.append(new Option(auto ? `Match automatically (${auto.issuer || auto.account})` : "None / match automatically", ""));
-  for (const c of codes) sel.append(new Option(`${nameOf(c)} · ${c.data.otp.account}`, c.id));
-  sel.value = d.totpId && codes.some((c) => c.id === d.totpId) ? d.totpId : "";
+  // The login's code: shown with Remove, or a setup key / link to add, or one of the separate 2FA codes to move in.
+  let moveIn = fromLink ?? "";
+  const otpBox = $("#otpBox", back);
+  const showOtp = () => {
+    if (otp) {
+      otpBox.replaceChildren(h(`<div class="pw"><span class="grow otpnow" data-otpnow></span><span class="faint">${esc([otp.issuer, otp.account].filter(Boolean).join(" · "))}</span><button class="m-btn subtle compact" type="button" id="otpRm">Remove</button></div>`));
+      const paint = async () => { const el = otpBox.querySelector<HTMLElement>("[data-otpnow]"); if (el && otp) el.textContent = groupCode((await totp(otp)).code); };
+      void paint();
+      $("#otpRm", otpBox).onclick = () => { otp = undefined; moveIn = ""; showOtp(); };
+      return;
+    }
+    otpBox.replaceChildren(h(`<div class="otpadd"><input class="m-field key" id="otpKey" placeholder="Setup key (GHBE AHFH ...) or otpauth:// link" autocomplete="off" autocapitalize="characters" spellcheck="false"><div class="keystate" id="otpState"></div>
+      ${codes.length ? `<select class="m-field" id="otpPick"><option value="">or use a saved 2FA code...</option>${codes.map((c) => `<option value="${c.id}">${esc(`${nameOf(c)} · ${c.data.otp.account}`)}</option>`).join("")}</select>` : ""}</div>`));
+    const key = $<HTMLInputElement>("#otpKey", otpBox);
+    key.oninput = () => {
+      const v = key.value.trim();
+      const k = /^otpauth/i.test(v) ? { ok: true, message: "A 2FA link ✓" } : checkKey(v);
+      $("#otpState", otpBox).textContent = k.message;
+      $("#otpState", otpBox).className = `keystate ${k.ok ? "ok" : k.message ? "bad" : ""}`;
+    };
+    $<HTMLSelectElement>("#otpPick", otpBox)?.addEventListener("change", (e) => {
+      const c = codes.find((x) => x.id === (e.target as HTMLSelectElement).value);
+      if (c) { otp = c.data.otp; moveIn = c.id; showOtp(); }
+    });
+  };
+  showOtp();
   const close = () => { back.remove(); renderList(); };
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
@@ -585,16 +637,26 @@ function loginEditor(existing: LoginRow | null) {
     ev.preventDefault();
     const name = $<HTMLInputElement>("#name", back).value.trim();
     if (!name) return void ($("#result", back).textContent = "Give it a name.");
+    const username = $<HTMLInputElement>("#user", back).value.trim();
+    const typed = back.querySelector<HTMLInputElement>("#otpKey")?.value.trim() ?? "";
+    if (typed) {
+      try {
+        if (/^otpauth/i.test(typed)) { const r = importText(typed); if (!r.entries[0]) throw new Error(r.skipped[0] ?? "that link has no 2FA code"); otp = r.entries[0]; }
+        else { const k = checkKey(typed); if (!k.ok) throw new Error(k.message); otp = normalizeEntry({ issuer: name, account: username, secret: k.clean }); }
+      } catch (e) { return void ($("#result", back).textContent = `One-time code: ${(e as Error).message}`); }
+    }
     const data: LoginItem = {
       type: "login",
       name,
       urls: $<HTMLInputElement>("#url", back).value.split(/[\s,]+/).filter(Boolean),
-      username: $<HTMLInputElement>("#user", back).value.trim(),
+      username,
       password: pass.value,
       notes: $<HTMLTextAreaElement>("#notes", back).value,
-      ...(sel.value ? { totpId: sel.value } : {}),
+      ...(otp ? { otp } : {}),
+      ...(d.favorite ? { favorite: true } : {}),
     };
     if (existing) vault!.update(existing.id, data); else vault!.add(data);
+    if (otp && moveIn && vault!.get(moveIn)?.data.type === "totp") vault!.remove(moveIn);   // the separate code is now part of this login
     await save();
     close();
     toast(existing ? `${name} saved` : `${name} added`);
@@ -872,7 +934,7 @@ async function addCodes(r: ImportResult) {
     names.push([e.issuer, e.account].filter(Boolean).join(" · ") || "a code");
     added++;
   }
-  if (added) await save();
+  if (added) { mergeCodesIntoLogins(vault!); await save(); }   // a code for a saved login joins it
   return { added, already, skipped: r.skipped, names };
 }
 
@@ -884,9 +946,9 @@ async function importLogins(text: string): Promise<string[]> {
   let added = 0, already = 0, withCode = 0;
   for (const l of res.logins) {
     if (haveLogin.has(`${l.name}|${l.username}`.toLowerCase())) { already++; continue; }
-    let totpId: string | undefined;
-    if (l.totp && !haveCode.has(l.totp.secret)) { totpId = vault!.add({ type: "totp", otp: l.totp }).id; haveCode.add(l.totp.secret); withCode++; }
-    vault!.add({ type: "login", name: l.name, urls: l.urls, username: l.username, password: l.password, notes: l.notes, ...(totpId ? { totpId } : {}) });
+    const otp = l.totp && !haveCode.has(l.totp.secret) ? l.totp : undefined;
+    if (otp) { haveCode.add(otp.secret); withCode++; }
+    vault!.add({ type: "login", name: l.name, urls: l.urls, username: l.username, password: l.password, notes: l.notes, ...(otp ? { otp } : {}) });
     haveLogin.add(`${l.name}|${l.username}`.toLowerCase());
     added++;
   }
