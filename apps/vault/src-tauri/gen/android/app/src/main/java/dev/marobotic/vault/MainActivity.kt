@@ -64,7 +64,7 @@ class MainActivity : TauriActivity() {
   /** What Vault's window can ask of Android. Only Vault's own page is ever loaded in this WebView. */
   inner class Bridge {
     @JavascriptInterface fun setAutofill(json: String) {
-      AutofillStore.set(json)
+      AutofillStore.set(this@MainActivity, json)
       if (forAutofill) { forAutofill = false; runOnUiThread { moveTaskToBack(true) } }
     }
     @JavascriptInterface fun clearAutofill() = AutofillStore.clear()

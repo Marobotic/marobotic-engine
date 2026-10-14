@@ -1,5 +1,8 @@
 package dev.marobotic.vault
 
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
@@ -7,51 +10,109 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * What Android autofill may offer, handed over by Vault's window while the vault is open. It lives in
- * memory only: when Vault locks, or Android ends the app, it is gone and autofill asks to unlock.
- * Matching follows the same rules as the browser extension (the tables come from domains.ts).
+ * What Android autofill may offer. While Vault is unlocked, its window hands over the full list (in
+ * memory). Two copies stay on the phone for when it's locked, so suggestions still show:
+ *  - the hints: names, usernames and sites only - no password, no 2FA secret - in Vault's private storage;
+ *  - the full list, sealed (SealedIndex) so it only opens after a fingerprint, face or the screen lock.
+ * Tapping a suggestion while locked asks for that, then fills. Matching follows the same rules as the
+ * browser extension (the tables come from domains.ts).
  */
 object AutofillStore {
     class Otp(val secret: String, val digits: Int, val period: Int, val algorithm: String)
-    class Login(val id: String, val name: String, val username: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?)
-    class Code(val id: String, val issuer: String, val account: String, val words: List<String>, val otp: Otp)
+    class Login(val id: String, val name: String, val username: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?, val hasOtp: Boolean)
+    class Code(val id: String, val issuer: String, val account: String, val words: List<String>, val otp: Otp?)
     class Passkey(val id: String, val rpId: String, val credentialId: String, val userHandle: String, val username: String, val displayName: String, val privateKeyPkcs8: String)
     class Index(val logins: List<Login>, val codes: List<Code>, val multi: Set<String>, val groups: Map<String, String>, val passkeys: List<Passkey>)
     class Save(val url: String, val app: String, val username: String, val password: String)
+    /** A one-time code to offer: a login's own ("login:<id>") or a 2FA entry ("code:<id>"). */
+    class CodeHit(val ref: String, val who: String, val otp: Otp?)
 
+    /** The full list: set while the vault is open (or right after a fingerprint opened the sealed copy). */
     @Volatile var index: Index? = null
         private set
+    @Volatile private var hintsCache: Index? = null
     @Volatile var pendingLink: String? = null
     private val saves = mutableListOf<Save>()
     private val madePasskeys = mutableListOf<JSONObject>()
     val onUnlock = CopyOnWriteArrayList<() -> Unit>()
+    private val main = Handler(Looper.getMainLooper())
+    private val relock = Runnable { index = null }
 
-    fun set(json: String) {
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("vault.autofill", Context.MODE_PRIVATE)
+
+    /** From Vault's window: the vault is open. Kept in memory, and the hints + sealed copy are refreshed. */
+    fun set(ctx: Context, json: String) {
+        val wasLocked = index == null
+        main.removeCallbacks(relock)
+        index = withMade(parse(JSONObject(json), secrets = true))
+        remember(ctx, json)
+        if (wasLocked) onUnlock.forEach { it() }
+    }
+
+    /** After a fingerprint opened the sealed copy: usable for a few minutes, then locked again. */
+    fun openSealed(json: String) {
+        index = withMade(parse(JSONObject(json), secrets = true))
+        main.removeCallbacks(relock)
+        main.postDelayed(relock, 5 * 60_000L)
+    }
+
+    fun clear() { main.removeCallbacks(relock); index = null }
+
+    /** Names, usernames and sites (no secrets), for suggestions while the vault is locked. */
+    fun hints(ctx: Context): Index? {
+        hintsCache?.let { return it }
+        val text = prefs(ctx).getString("hints", null) ?: return null
+        return runCatching { parse(JSONObject(text), secrets = false) }.getOrNull()?.also { hintsCache = it }
+    }
+
+    private fun remember(ctx: Context, json: String) {
         val o = JSONObject(json)
+        val hints = JSONObject().put("rules", o.optJSONObject("rules") ?: JSONObject())
+            .put("logins", JSONArray((o.optJSONArray("logins")?.objects() ?: emptyList()).map { l ->
+                JSONObject().put("id", l.getString("id")).put("name", l.optString("name")).put("username", l.optString("username"))
+                    .put("hosts", l.optJSONArray("hosts") ?: JSONArray()).put("words", l.optJSONArray("words") ?: JSONArray()).put("hasOtp", l.has("otp"))
+            }))
+            .put("codes", JSONArray((o.optJSONArray("codes")?.objects() ?: emptyList()).map { c ->
+                JSONObject().put("id", c.getString("id")).put("issuer", c.optString("issuer")).put("account", c.optString("account")).put("words", c.optJSONArray("words") ?: JSONArray())
+            }))
+        prefs(ctx).edit().putString("hints", hints.toString()).apply()
+        hintsCache = parse(hints, secrets = false)
+        runCatching { SealedIndex.seal(ctx, json) }
+    }
+
+    /** Signed out of Vault on this phone: nothing is kept for autofill any more. */
+    fun forget(ctx: Context) {
+        clear()
+        hintsCache = null
+        prefs(ctx).edit().clear().apply()
+        SealedIndex.clear(ctx)
+    }
+
+    private fun parse(o: JSONObject, secrets: Boolean): Index {
         val rules = o.optJSONObject("rules")
         val multi = rules?.optJSONArray("multi")?.strings()?.toSet() ?: emptySet()
         val groups = HashMap<String, String>()
         rules?.optJSONArray("groups")?.let { gs -> for (i in 0 until gs.length()) gs.getJSONArray(i).strings().let { g -> g.forEach { groups[it] = g[0] } } }
         val logins = o.optJSONArray("logins")?.objects()?.map {
-            Login(it.getString("id"), it.optString("name"), it.optString("username"), it.optString("password"),
-                it.optJSONArray("hosts")?.strings() ?: emptyList(), it.optJSONArray("words")?.strings() ?: emptyList(), it.optJSONObject("otp")?.toOtp())
+            val otp = if (secrets) it.optJSONObject("otp")?.toOtp() else null
+            Login(it.getString("id"), it.optString("name"), it.optString("username"), if (secrets) it.optString("password") else "",
+                it.optJSONArray("hosts")?.strings() ?: emptyList(), it.optJSONArray("words")?.strings() ?: emptyList(), otp, otp != null || it.optBoolean("hasOtp"))
         } ?: emptyList()
-        val codes = o.optJSONArray("codes")?.objects()?.mapNotNull {
-            val otp = it.optJSONObject("otp")?.toOtp() ?: return@mapNotNull null
-            Code(it.getString("id"), it.optString("issuer"), it.optString("account"), it.optJSONArray("words")?.strings() ?: emptyList(), otp)
+        val codes = o.optJSONArray("codes")?.objects()?.map {
+            Code(it.getString("id"), it.optString("issuer"), it.optString("account"), it.optJSONArray("words")?.strings() ?: emptyList(), if (secrets) it.optJSONObject("otp")?.toOtp() else null)
         } ?: emptyList()
-        val passkeys = o.optJSONArray("passkeys")?.objects()?.map {
+        val passkeys = if (!secrets) emptyList() else o.optJSONArray("passkeys")?.objects()?.map {
             Passkey(it.getString("id"), it.getString("rpId"), it.getString("credentialId"), it.getString("userHandle"),
                 it.optString("username"), it.optString("displayName"), it.getString("privateKeyPkcs8"))
         } ?: emptyList()
-        val wasLocked = index == null
-        // Passkeys made here but not yet taken in by Vault's window stay usable.
-        val waiting = synchronized(madePasskeys) { madePasskeys.map { it.toPasskey("new") } }
-        index = Index(logins, codes, multi, groups, passkeys + waiting.filter { w -> passkeys.none { it.credentialId == w.credentialId } })
-        if (wasLocked) onUnlock.forEach { it() }
+        return Index(logins, codes, multi, groups, passkeys)
     }
 
-    fun clear() { index = null }
+    // Passkeys made here but not yet taken in by Vault's window stay usable.
+    private fun withMade(i: Index): Index {
+        val waiting = synchronized(madePasskeys) { madePasskeys.map { it.toPasskey("new") } }
+        return Index(i.logins, i.codes, i.multi, i.groups, i.passkeys + waiting.filter { w -> i.passkeys.none { it.credentialId == w.credentialId } })
+    }
 
     fun addSave(s: Save) = synchronized(saves) { saves.add(s) }
 
@@ -95,14 +156,21 @@ object AutofillStore {
         return logins.filter { l -> l.hosts.contains(pkg.lowercase()) || l.words.any { it in words } }
     }
 
-    /** 2FA codes: those of the matching logins first, then codes named after the site or app. */
-    fun Index.codesFor(domain: String?, pkg: String, matched: List<Login>): List<Pair<String, Otp>> {
-        val out = LinkedHashMap<String, Pair<String, Otp>>()
-        matched.forEach { l -> l.otp?.let { out[it.secret] = Pair(l.username.ifBlank { l.name }, it) } }
+    /** One-time codes: those of the matching logins first, then 2FA entries named after the site or app. */
+    fun Index.codesFor(domain: String?, pkg: String, matched: List<Login>): List<CodeHit> {
+        val out = LinkedHashMap<String, CodeHit>()
+        matched.filter { it.hasOtp }.forEach { l -> out["login:${l.id}"] = CodeHit("login:${l.id}", l.username.ifBlank { l.name }, l.otp) }
         val words = if (!domain.isNullOrBlank()) listOf(word(siteKey(domain).substringBefore('.'))) else packageWords(pkg)
-        codes.filter { c -> c.words.any { w -> words.any { it == w || (it.length > 3 && w.contains(it)) } } }
-            .forEach { c -> out.putIfAbsent(c.otp.secret, Pair(listOf(c.issuer, c.account).filter { it.isNotBlank() }.joinToString(" · "), c.otp)) }
-        return out.values.toList()
+        codes.filter { c -> out.keys.none { it == "login:${c.id}" } && c.words.any { w -> words.any { it == w || (it.length > 3 && w.contains(it)) } } }
+            .forEach { c -> out.putIfAbsent("code:${c.id}", CodeHit("code:${c.id}", listOf(c.issuer, c.account).filter { it.isNotBlank() }.joinToString(" · "), c.otp)) }
+        // A login's own code also appears among the codes (with the login's id): once is enough.
+        return out.values.distinctBy { it.otp?.secret ?: it.ref }
+    }
+
+    /** A code by its reference, from the full list. */
+    fun Index.otpOf(ref: String): Otp? = when {
+        ref.startsWith("login:") -> logins.firstOrNull { it.id == ref.removePrefix("login:") }?.otp
+        else -> codes.firstOrNull { it.id == ref.removePrefix("code:") }?.otp
     }
 
     private fun JSONArray.strings() = (0 until length()).map { getString(it) }

@@ -68,7 +68,7 @@
             android:name=".AutofillAuthActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:theme="@style/Theme.vault.Translucent" />
 
         <provider
           android:name="androidx.core.content.FileProvider"
