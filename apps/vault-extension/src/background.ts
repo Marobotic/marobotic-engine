@@ -16,6 +16,7 @@ import { siteOf } from "../../vault/src/icons.ts";
 import { createPasskey, passkeysFor, rpIdFor, signIn as passkeySignIn, b64url, fromB64url } from "../../vault/src/passkeys.ts";
 import { allCodes, mergeCodesIntoLogins } from "../../vault/src/merge.ts";
 import { recordUse, useCounts } from "../../vault/src/usage.ts";
+import { editCode } from "../../vault/src/codes.ts";
 import * as account from "../../vault/ui/account.ts";
 import { DEFAULTS, type CodeHit, type Detail, type LoginInput, type Msg, type PkCreate, type PkGet, type Settings, type State, type Summary } from "./messages.ts";
 
@@ -222,7 +223,11 @@ async function detail(id: string): Promise<Detail | { error: string }> {
     const l = it as LoginRow, c = linkedCode(l);
     return { kind: "login", id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", password: l.data.password, urls: l.data.urls, notes: l.data.notes ?? "", site: loginSite(l.data), favorite: l.data.favorite, ...(c ? { code: await codeHit(c) } : {}) };
   }
-  if (it.data.type === "totp") { const c = it as TotpRow; return { kind: "totp", id, issuer: codeName(c), account: c.data.otp.account, site: siteOf({ issuer: c.data.otp.issuer }), code: await codeHit(c), favorite: c.data.favorite }; }
+  if (it.data.type === "totp") {
+    const c = it as TotpRow, o = c.data.otp;
+    return { kind: "totp", id, issuer: codeName(c), account: o.account, site: siteOf({ issuer: o.issuer }), code: await codeHit(c), favorite: c.data.favorite,
+      name: c.data.label ?? "", service: o.issuer, digits: o.digits, period: o.period, algorithm: o.algorithm, notes: c.data.notes ?? "" };
+  }
   if (it.data.type === "passkey") { const p = it.data; return { kind: "passkey", id, rpId: p.rpId, rpName: p.rpName || p.rpId, username: p.username, displayName: p.displayName ?? "", created: p.created, site: siteKey(p.rpId) }; }
   return { error: "not shown here" };
 }
@@ -401,6 +406,13 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
     }
     case "item": return vault ? detail(m.id) : { locked: true };
     case "saveLogin": return vault ? saveLogin(m.login) : { locked: true };
+    case "saveCode": {
+      if (!vault) return { locked: true };
+      const { id, ...edit } = m.code;
+      try { editCode(vault, id, edit); } catch (e) { return { error: (e as Error).message }; }
+      await save();
+      return { ok: true };
+    }
     case "delete": if (vault?.get(m.id)) { vault.remove(m.id); await save(); } return { ok: true };
     case "pin": {
       const it = vault?.get(m.id);

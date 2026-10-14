@@ -23,8 +23,11 @@ export type Summary = {
 };
 export type Detail =
   | { kind: "login"; id: string; name: string; username: string; email: string; password: string; urls: string[]; notes: string; site: string; code?: CodeHit; favorite?: boolean }
-  | { kind: "totp"; id: string; issuer: string; account: string; site: string; code: CodeHit; favorite?: boolean }
+  | { kind: "totp"; id: string; issuer: string; account: string; site: string; code: CodeHit; favorite?: boolean;
+      name: string; service: string; digits: number; period: number; algorithm: string; notes: string }
   | { kind: "passkey"; id: string; rpId: string; rpName: string; username: string; displayName: string; created?: number; site: string };
+/** An edited 2FA code (vault/src/codes.ts); an empty `secret` keeps the key. */
+export type CodeInput = { id: string; name: string; issuer: string; account: string; secret: string; digits: number; period: number; algorithm: "SHA1" | "SHA256" | "SHA512"; notes: string };
 export type LoginInput = { id?: string; name: string; username: string; email: string; password: string; urls: string[]; notes: string; otpKey?: string; removeOtp?: boolean };
 export type State = { state: "signedOut" | "locked" | "open"; email?: string; synced?: "synced" | "offline" | "signedOut"; settings: Settings };
 
@@ -44,7 +47,7 @@ export type Msg =
   | { t: "pkCreate"; options: PkCreate } | { t: "pkGet"; options: PkGet; id: string }
   // the popup
   | { t: "state" } | { t: "signIn"; email: string; password: string } | { t: "lock" } | { t: "signOut" } | { t: "sync" }
-  | { t: "list"; q: string; site: boolean } | { t: "item"; id: string } | { t: "saveLogin"; login: LoginInput } | { t: "delete"; id: string }
+  | { t: "list"; q: string; site: boolean } | { t: "item"; id: string } | { t: "saveLogin"; login: LoginInput } | { t: "saveCode"; code: CodeInput } | { t: "delete"; id: string }
   | { t: "pin"; id: string } | { t: "fillTab"; id: string } | { t: "setSettings"; settings: Partial<Settings> }
   | { t: "never" } | { t: "unnever"; site: string } | { t: "generate" };
 

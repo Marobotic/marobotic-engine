@@ -11,6 +11,7 @@ import { MULTI, SAME_SIGN_IN, loginsFor, namedSite, siteKey } from "../src/domai
 import { allCodes, mergeCodesIntoLogins } from "../src/merge.ts";
 import { importLogins as importLoginsInto } from "../src/importLogins.ts";
 import { byUse, recordUse, useCounts } from "../src/usage.ts";
+import { editCode } from "../src/codes.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -648,7 +649,7 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
   } else if (i.data.inLogin) {
     const t = i as TotpRow, owner = vault!.get(t.id) as LoginRow;
     openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] },
-      { items: [pin, { label: "Edit login", icon: "&#xf044;", onClick: () => loginEditor(owner) }] },
+      { items: [pin, { label: "Edit code", icon: "&#xf044;", onClick: () => codeEditor(t) }, { label: "Edit login", icon: "&#xf084;", onClick: () => loginEditor(owner) }] },
       { items: [{ label: "Remove the code from this login", icon: "&#xf1f8;", danger: true, onClick: async () => {
         if (!confirm(`Remove the 2FA code from ${owner.data.name}? Make sure you can still sign in another way.`)) return;
         const { otp: _gone, ...rest } = owner.data;
@@ -656,7 +657,8 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
       } }] }]);
   } else {
     const t = i as TotpRow;
-    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] }, { items: [pin] }, { items: [del] }]);
+    openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] },
+      { items: [pin, { label: "Edit", icon: "&#xf044;", onClick: () => codeEditor(t) }] }, { items: [del] }]);
   }
 }
 
@@ -766,6 +768,102 @@ function paintCode(row: HTMLElement, r: { code: string; remaining: number }, per
 }
 
 // ------------------------------------------------------------------ login editor
+/** Edit a 2FA code: its name, service, account, and (under More) its setup key and settings. A login's
+ *  own code keeps the login's name; its other details are edited here too. */
+function codeEditor(t: TotpRow) {
+  const inLogin = !!t.data.inLogin;
+  const o = t.data.otp;
+  const sel = (id: string, values: (string | number)[], cur: string | number, label = (v: string | number) => String(v)) =>
+    `<select class="m-field" id="${id}">${values.map((v) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label(v)}</option>`).join("")}</select>`;
+  const back = h(`
+    <div class="backdrop">
+      <form class="m-modal modal">
+        <header>Edit 2FA code <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
+        <div class="content">
+          <div class="pw"><span class="grow otpnow" id="now"></span><span class="faint" id="left"></span></div>
+          ${inLogin ? `<div class="faint hint">The 2FA code of the login ${esc(t.data.label ?? "")}: the list shows it under the login's name.</div>`
+            : `<label class="lab">Name</label><input class="m-field" id="name" value="${esc(t.data.label ?? "")}" placeholder="${esc(o.issuer || "e.g. Discord")}">`}
+          <label class="lab">Service</label><input class="m-field" id="issuer" value="${esc(o.issuer)}" placeholder="e.g. Discord" autocapitalize="off">
+          <label class="lab">Account</label><input class="m-field" id="account" value="${esc(o.account)}" placeholder="the email or username it's for" autocomplete="off" autocapitalize="off">
+          <details class="more"><summary>Setup key and settings</summary>
+            <label class="lab">Setup key</label>
+            <div class="pw"><input class="m-field grow key" id="secret" placeholder="Empty keeps the current key" autocomplete="off" autocapitalize="characters" spellcheck="false"><button class="m-btn subtle compact" type="button" id="showKey">Show current</button></div>
+            <div class="keystate" id="keyState"></div>
+            <label class="lab">Digits</label>${sel("digits", [6, 7, 8], o.digits)}
+            <label class="lab">New code every</label>${sel("period", [30, 60], o.period, (v) => `${v} seconds`)}
+            <label class="lab">Algorithm</label>${sel("algorithm", ["SHA1", "SHA256", "SHA512"], o.algorithm)}
+            <div class="faint hint">Only change these if the site says so: a wrong setting gives wrong codes.</div>
+          </details>
+          ${inLogin ? "" : `<label class="lab">Notes</label><textarea id="notes">${esc(t.data.notes ?? "")}</textarea>`}
+          <div class="result" id="result"></div>
+        </div>
+        <footer>
+          ${inLogin ? "" : `<button class="m-btn danger" type="button" id="del">&#xf1f8; Delete</button>`}
+          <span class="grow"></span>
+          <button class="m-btn" type="button" data-close>Cancel</button>
+          <button class="m-btn primary" type="submit">Save</button>
+        </footer>
+      </form>
+    </div>`).firstElementChild as HTMLElement;
+  document.body.append(back);
+  const val = (id: string) => $<HTMLInputElement>(`#${id}`, back)?.value ?? "";
+  // The code as it will be with what's typed, so a wrong key or setting shows before saving.
+  const preview = (): OtpEntry | null => {
+    try {
+      const k = val("secret").trim() ? checkKey(val("secret")) : { ok: true, clean: o.secret };
+      if (!k.ok) return null;
+      return normalizeEntry({ ...o, secret: k.clean, digits: Number(val("digits")), period: Number(val("period")), algorithm: val("algorithm") as Algorithm });
+    } catch { return null; }
+  };
+  const paint = async () => {
+    if (!back.isConnected) return clearInterval(timer);
+    const p = preview();
+    if (!p) { $("#now", back).textContent = "------"; $("#left", back).textContent = ""; return; }
+    const r = await totp(p);
+    $("#now", back).textContent = groupCode(r.code);
+    $("#left", back).textContent = `${r.remaining}s`;
+  };
+  const timer = setInterval(() => void paint(), 1000);
+  void paint();
+  $("#secret", back).oninput = () => {
+    const v = val("secret").trim();
+    const k = v ? checkKey(v) : { ok: true, message: "" };
+    $("#keyState", back).textContent = k.message;
+    $("#keyState", back).className = `keystate ${k.ok ? "ok" : k.message ? "bad" : ""}`;
+    void paint();
+  };
+  for (const id of ["digits", "period", "algorithm"]) $(`#${id}`, back).onchange = () => void paint();
+  $("#showKey", back).onclick = (e) => {
+    const b = e.currentTarget as HTMLButtonElement;
+    const ks = $("#keyState", back);
+    const on = b.dataset.on !== "1";
+    b.dataset.on = on ? "1" : "";
+    b.textContent = on ? "Hide" : "Show current";
+    ks.className = "keystate";
+    ks.textContent = on ? o.secret.replace(/(.{4})/g, "$1 ").trim() : "";
+  };
+  const close = () => { clearInterval(timer); back.remove(); renderList(); };
+  back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
+  back.onclick = (e) => { if (e.target === back) close(); };
+  $("#del", back)?.addEventListener("click", async () => {
+    if (!confirm(`Delete ${nameOf(t)}? Make sure you can still sign in another way.`)) return;
+    vault!.remove(t.id); await save(); close();
+  });
+  $<HTMLFormElement>("form", back).onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      editCode(vault!, t.id, {
+        ...(inLogin ? {} : { name: val("name"), notes: $<HTMLTextAreaElement>("#notes", back).value }),
+        issuer: val("issuer"), account: val("account"), secret: val("secret"),
+        digits: Number(val("digits")), period: Number(val("period")), algorithm: val("algorithm") as Algorithm,
+      });
+    } catch (e) { $("#result", back).textContent = (e as Error).message; return; }
+    await save();
+    toast(`Saved · ${val("name") || val("issuer") || "2FA code"}`);
+    close();
+  };
+}
+
 function loginEditor(existing: LoginRow | null) {
   const d: LoginItem = existing ? { ...existing.data } : { type: "login", name: "", urls: [], username: "", password: "", notes: "" };
   const codes = standaloneCodes();

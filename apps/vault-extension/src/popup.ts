@@ -2,7 +2,7 @@
 // The toolbar popup: sign in, then everything in Vault (or just what belongs to the open page), each
 // item's details, new and edited logins, and the extension's own settings.
 import { entryIcon } from "../../vault/ui/widgets.ts";
-import { send, type Detail, type LoginInput, type Settings, type State, type Summary } from "./messages.ts";
+import { send, type CodeInput, type Detail, type LoginInput, type Settings, type State, type Summary } from "./messages.ts";
 
 const app = document.getElementById("app")!;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -136,6 +136,7 @@ function rowOf(i: Summary, onSite: boolean): HTMLElement {
       ${i.kind === "passkey" ? `<span class="kind passkey">PASSKEY</span>` : ""}
       ${i.kind === "login" && onSite ? `<button data-fill>Fill</button>` : ""}
       ${i.kind === "login" ? `<button class="icon" data-copy title="Copy password">&#xf0c5;</button>` : ""}
+      ${i.kind === "totp" ? `<button class="icon" data-more title="Details and edit">&#xf054;</button>` : ""}
     </div>`);
   row.querySelector(".tileslot")!.replaceWith(entryIcon(i.title, i.site));
   row.onclick = (e) => {
@@ -143,6 +144,7 @@ function rowOf(i: Summary, onSite: boolean): HTMLElement {
     if (i.kind === "totp" || (e.target as HTMLElement).closest("[data-otp]")) return void copy(i.code!, "Code");
     void detailScreen(i.id);
   };
+  row.querySelector<HTMLElement>("[data-more]")?.addEventListener("click", () => void detailScreen(i.id));
   row.querySelector<HTMLElement>("[data-fill]")?.addEventListener("click", async () => {
     const r = await send<{ ok?: boolean; error?: string }>({ t: "fillTab", id: i.id });
     r.ok ? window.close() : toast(r.error ?? "Couldn't fill");
@@ -208,6 +210,8 @@ async function detailScreen(id: string) {
   } else if (d.kind === "totp") {
     body.append(codeField(d.code.code, d.code.remaining, d.code.period));
     if (d.account) body.append(field("Account", d.account, { copy: d.account }));
+    if (d.notes) body.append(field("Notes", d.notes));
+    acts.append(h(`<button id="edit">&#xf044; Edit</button>`));
   } else {
     body.append(field("Website", d.rpId), field("Username", d.username || d.displayName, { copy: d.username }));
     if (d.created) body.append(field("Created", new Date(d.created).toLocaleString()));
@@ -222,6 +226,7 @@ async function detailScreen(id: string) {
     void listScreen();
   };
   if (d.kind === "login") $("#edit").onclick = () => void editScreen(d);
+  if (d.kind === "totp") $("#edit").onclick = () => codeEditScreen(d);
   $("#fill")?.addEventListener("click", async () => {
     const r = await send<{ ok?: boolean; error?: string }>({ t: "fillTab", id });
     r.ok ? window.close() : toast(r.error ?? "Couldn't fill");
@@ -283,6 +288,37 @@ async function editScreen(d: Extract<Detail, { kind: "login" }> | null) {
     if (!r.ok) return void ($("#err").textContent = r.error ?? "Couldn't save.");
     toast(d ? "Saved" : "Login added");
     void listScreen();
+  };
+}
+
+// ------------------------------------------------------------------ edit a 2FA code
+function codeEditScreen(d: Extract<Detail, { kind: "totp" }>) {
+  clearInterval(ticker);
+  const sel = (id: string, values: (string | number)[], cur: string | number, label = (v: string | number) => String(v)) =>
+    `<select id="${id}">${values.map((v) => `<option value="${v}" ${v === cur ? "selected" : ""}>${label(v)}</option>`).join("")}</select>`;
+  app.replaceChildren(
+    h(`<div class="bar"><button class="icon" id="back" title="Back">&#xf060;</button><span class="title">Edit 2FA code</span></div>`),
+    h(`<div class="scroll"><form class="edit">
+      <label>Name</label><input id="name" value="${esc(d.name)}" placeholder="${esc(d.service || "e.g. Discord")}">
+      <label>Service</label><input id="issuer" value="${esc(d.service)}" placeholder="e.g. Discord">
+      <label>Account</label><input id="account" value="${esc(d.account)}" placeholder="the email or username it's for" autocomplete="off">
+      <label>New setup key</label><input id="secret" placeholder="Empty keeps the current key" autocomplete="off" spellcheck="false">
+      <label>Digits</label>${sel("digits", [6, 7, 8], d.digits)}
+      <label>New code every</label>${sel("period", [30, 60], d.period, (v) => `${v} seconds`)}
+      <label>Algorithm</label>${sel("algorithm", ["SHA1", "SHA256", "SHA512"], d.algorithm)}
+      <label>Notes</label><textarea id="notes">${esc(d.notes)}</textarea>
+      <div class="err" id="err"></div>
+    </form></div>`),
+    h(`<div class="actions"><span class="grow"></span><button id="cancel">Cancel</button><button class="primary" id="save">Save</button></div>`));
+  const v = (id: string) => $<HTMLInputElement>(`#${id}`).value;
+  $("#back").onclick = $("#cancel").onclick = () => void detailScreen(d.id);
+  $("#save").onclick = async () => {
+    const code: CodeInput = { id: d.id, name: v("name"), issuer: v("issuer"), account: v("account"), secret: v("secret"),
+      digits: Number(v("digits")), period: Number(v("period")), algorithm: v("algorithm") as CodeInput["algorithm"], notes: $<HTMLTextAreaElement>("#notes").value };
+    const r = await send<{ ok?: boolean; error?: string }>({ t: "saveCode", code });
+    if (!r.ok) return void ($("#err").textContent = r.error ?? "Couldn't save.");
+    toast("Saved");
+    void detailScreen(d.id);
   };
 }
 

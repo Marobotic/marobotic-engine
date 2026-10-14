@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vault",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Vault in your browser: fills logins and 2FA codes, saves new logins and passkeys, signs in with passkeys, suggests strong passwords. Syncs with your marobotic account.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAySrzpYeVU3jnIjH5x1Y6U9GOcMPSCWvnJHwQ4OEvhh70lDMsdgiiFCwfUH8uFsWKwhezfUKT13I2oQ8sWb7vN+Kh3vVDdEAIs0qw2o6vOyWpkDx7B7v27mxXbF7mg8OnRUmFWwYfMX4gOAqaU5R93wvDtgqAOw3pC5fl9DjpZ+kILwlfTaO6lK6Kf1blXdapDaqg6Wo6qSrK70jxDwo9AG0sINZHAzyQteU40U5VBXw/PB6NUfH/V/RSbviG1H0B1AONesNo4SAM5wfD7ByoLubPQL/xq9jwIZpaN0m195pXqV93AueOfh0NvNfgKtZZ8siun5TeBmeGDq2VoXACVwIDAQAB",
   "minimum_chrome_version": "116",

@@ -23,6 +23,7 @@ export async function fetchVault(_session: string): Promise<{ rev: number; file:
     v.add({ type: "login", name: "Local test", urls: ["http://localhost:8643"], username: "tester", password: "hunter2-local", notes: "", totpId: code.id });
     v.add({ type: "login", name: "Local test (2)", urls: ["http://localhost:8643"], username: "maro@marobotic.dev", password: "maro-pw", notes: "" });
     v.add({ type: "login", name: "GitHub", urls: ["https://github.com"], username: "mi", password: "gh-pw", notes: "" });
+    v.add({ type: "totp", otp: normalizeEntry({ issuer: "Discrod", account: "old@x.com", secret: "GEZDGNBVGY3TQOJQ" }) });   // a code on its own, for editing
     file = v.toFile();
   }
   return { rev, file };
