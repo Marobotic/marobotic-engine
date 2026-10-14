@@ -367,9 +367,9 @@ function settingsModal() {
   const af = $("#afState", back);
   if (af) {
     const showAf = () => {
-      const st = platform.autofillState();
-      af.textContent = st === "on" ? "On: Vault offers your logins, passkeys, strong new passwords and 2FA codes when you sign in to apps and websites, and saves new logins and passkeys."
-        : st === "off" ? "Off: pick Vault under Passwords, passkeys & autofill so it can fill logins, passkeys and 2FA codes everywhere. In Chrome, also turn on Settings > Autofill services > Autofill using another service."
+      const st = platform.autofillState(), who = platform.autofillProvider(), keys = platform.passkeysOnVault();
+      af.textContent = st === "on" ? `On: Vault offers your logins, strong new passwords and 2FA codes (under the field and in the keyboard) when you sign in to apps and websites, and saves new logins.${keys ? " Passkeys too." : " Passkeys: pick Vault as the preferred service too."}`
+        : st === "off" ? `${who ? `${who} fills passwords now. ` : ""}Pick Vault under Passwords, passkeys & autofill so it fills logins, passkeys and 2FA codes everywhere. In Chrome, also turn on Settings > Autofill services > Autofill using another service.`
         : "This Android version has no autofill service setting.";
       $<HTMLButtonElement>("#afSet", back).textContent = st === "on" ? "Change" : "Choose Vault";
     };

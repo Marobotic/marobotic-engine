@@ -85,6 +85,8 @@ type AndroidBridge = {
   takePasskeys(): string;
   takeLink(): string;
   autofillState(): string;           // "on" | "off" | "unsupported"
+  autofillProvider(): string;        // the app filling passwords now ("Vault", "Proton Pass", "")
+  passkeyProviderIsVault(): boolean;
   openAutofillSettings(): void;
 };
 const android = (globalThis as { VaultAndroid?: AndroidBridge }).VaultAndroid;
@@ -105,4 +107,6 @@ export function takePasskeys(): Record<string, unknown>[] {
   try { return JSON.parse(android.takePasskeys() || "[]") as Record<string, unknown>[]; } catch { return []; }
 }
 export const autofillState = () => (android ? android.autofillState() : "unsupported");
+export const autofillProvider = () => (android ? android.autofillProvider() : "");
+export const passkeysOnVault = () => (android ? android.passkeyProviderIsVault() : false);
 export const openAutofillSettings = () => android?.openAutofillSettings();

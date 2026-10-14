@@ -30,6 +30,7 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     val newPasswords = mutableListOf<AutofillId>()
     var otp: AutofillId? = null
     var webDomain: String? = null
+    var focused: AutofillId? = null
     val pkg: String = structure.activityComponent.packageName
     var usernameValue = ""
     var passwordValue = ""
@@ -48,7 +49,10 @@ class Fields(structure: AssistStructure, ownPackage: String) {
 
     private fun visit(n: AssistStructure.ViewNode) {
         n.webDomain?.takeIf { it.isNotBlank() && webDomain == null }?.let { webDomain = it }
-        if (n.autofillId != null && n.autofillType == View.AUTOFILL_TYPE_TEXT && n.visibility == View.VISIBLE) classify(n)
+        if (n.autofillId != null && n.autofillType == View.AUTOFILL_TYPE_TEXT && n.visibility == View.VISIBLE) {
+            if (n.isFocused) focused = n.autofillId
+            classify(n)
+        }
         for (i in 0 until n.childCount) visit(n.getChildAt(i))
     }
 
@@ -94,7 +98,8 @@ class VaultAutofillService : AutofillService() {
         val structure = request.fillContexts.lastOrNull()?.structure ?: return callback.onSuccess(null)
         val fields = Fields(structure, packageName)
         if (fields.own || !fields.any) return callback.onSuccess(null)
-        callback.onSuccess(respond(this, fields))
+        val inline = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
+        callback.onSuccess(respond(this, fields, inline))
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
@@ -138,22 +143,48 @@ class VaultAutofillService : AutofillService() {
             return chars.joinToString("")
         }
 
+        /** One suggestion, both as a row under the field and (Android 11+) as a chip in the keyboard. */
+        private class Chips(val ctx: Context, val inline: Any?) {
+            private var n = 0
+            fun dataset(title: String, sub: String): Dataset.Builder {
+                val menu = row(ctx, title, sub)
+                if (Build.VERSION.SDK_INT >= 30) Inline.presentation(ctx, inline, n++, title, sub)?.let {
+                    @Suppress("DEPRECATION") return Dataset.Builder(menu).setInlinePresentation(it)
+                }
+                return Dataset.Builder(menu)
+            }
+        }
+
+        /**
+         * The suggestions for a screen, following the same rules as the browser extension: the logins for
+         * this site or app (Android narrows them as you type); a username already filled in means only
+         * that account's password; a strong password only in sign-up fields; the current 2FA code in a
+         * code field. Locked: one entry that opens Vault and fills once it is unlocked.
+         */
         @Suppress("DEPRECATION")
-        fun respond(ctx: Context, f: Fields): FillResponse? {
+        fun respond(ctx: Context, f: Fields, inline: Any? = null): FillResponse? {
             val b = FillResponse.Builder()
             val index = AutofillStore.index
+            val chips = Chips(ctx, inline)
             var any = false
             val loginField = f.password ?: f.username
             if (index == null) {
-                // Locked: one entry that opens Vault; once it is unlocked the fields fill by themselves.
                 val sender = PendingIntent.getActivity(ctx, 1, Intent(ctx, AutofillAuthActivity::class.java),
                     PendingIntent.FLAG_CANCEL_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)).intentSender
-                b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, "Vault is locked", "Tap to unlock and fill"))
+                val locked = if (Build.VERSION.SDK_INT >= 30) Inline.presentation(ctx, inline, 0, "Vault is locked", "Tap to unlock") else null
+                if (locked != null && Build.VERSION.SDK_INT >= 30) b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, "Vault is locked", "Tap to unlock and fill"), locked)
+                else b.setAuthentication(f.ids.toTypedArray(), sender, row(ctx, "Vault is locked", "Tap to unlock and fill"))
                 any = true
             } else with(AutofillStore) {
-                val logins = index.loginsFor(f.webDomain, f.pkg)
-                if (loginField != null) for (l in logins.take(6)) {
-                    val d = Dataset.Builder(row(ctx, l.username.ifBlank { l.name }, "${l.name} · Vault"))
+                var logins = index.loginsFor(f.webDomain, f.pkg)
+                // The password field of a form whose username is already there: that account only.
+                val typedUser = f.usernameValue.trim().lowercase()
+                if (typedUser.isNotEmpty() && f.focused != null && f.focused != f.username) {
+                    val exact = logins.filter { it.username.lowercase() == typedUser }
+                    logins = exact.ifEmpty { logins.filter { it.username.lowercase().startsWith(typedUser) } }
+                }
+                if (loginField != null && f.focused != f.otp) for (l in logins.take(6)) {
+                    val d = chips.dataset(l.username.ifBlank { l.name }, "${l.name} · Vault")
                     f.username?.let { if (l.username.isNotEmpty()) d.setValue(it, AutofillValue.forText(l.username)) }
                     f.password?.let { d.setValue(it, AutofillValue.forText(l.password)) }
                     b.addDataset(d.build()); any = true
@@ -161,14 +192,14 @@ class VaultAutofillService : AutofillService() {
                 f.otp?.let { otpId ->
                     for ((who, otp) in index.codesFor(f.webDomain, f.pkg, logins).take(4)) {
                         val code = Totp.code(otp)
-                        b.addDataset(Dataset.Builder(row(ctx, code.chunked(3).joinToString(" "), "2FA · $who")).setValue(otpId, AutofillValue.forText(code)).build())
+                        b.addDataset(chips.dataset(code.chunked(3).joinToString(" "), "2FA · $who").setValue(otpId, AutofillValue.forText(code)).build())
                         any = true
                     }
                 }
-                if (f.newPasswords.isNotEmpty() || (f.password != null && logins.isEmpty())) {
+                if (f.newPasswords.isNotEmpty()) {
                     val pw = strongPassword()
-                    val d = Dataset.Builder(row(ctx, "Use a strong password", pw))
-                    (f.newPasswords.ifEmpty { listOfNotNull(f.password) }).forEach { d.setValue(it, AutofillValue.forText(pw)) }
+                    val d = chips.dataset("Use a strong password", pw)
+                    f.newPasswords.forEach { d.setValue(it, AutofillValue.forText(pw)) }
                     b.addDataset(d.build()); any = true
                 }
             }

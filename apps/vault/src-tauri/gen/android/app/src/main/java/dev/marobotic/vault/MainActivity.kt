@@ -59,6 +59,16 @@ class MainActivity : TauriActivity() {
       if (!am.isAutofillSupported) return "unsupported"
       return if (am.hasEnabledAutofillServices()) "on" else "off"
     }
+    /** The app now filling passwords on this phone (autofill, and passkeys on Android 14+), by name. */
+    @JavascriptInterface fun autofillProvider(): String {
+      val ids = listOf("autofill_service", "credential_service_primary", "credential_service")
+        .mapNotNull { Settings.Secure.getString(contentResolver, it)?.split(":")?.firstOrNull()?.substringBefore("/")?.takeIf { p -> p.isNotBlank() } }
+      val pkg = ids.firstOrNull() ?: return ""
+      if (pkg == packageName) return "Vault"
+      return try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+    }
+    @JavascriptInterface fun passkeyProviderIsVault(): Boolean =
+      listOf("credential_service_primary", "credential_service").any { Settings.Secure.getString(contentResolver, it)?.contains("$packageName/") == true }
     @JavascriptInterface fun openAutofillSettings() {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
       runOnUiThread {
