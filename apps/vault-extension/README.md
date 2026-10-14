@@ -1,16 +1,32 @@
 # Vault for Chrome, Brave and Edge
 
-Fills logins and 2FA codes from the **Vault app on this PC**, offers to save a login after you sign in
-with one Vault doesn't know (or to update a changed password), suggests a strong password in sign-up and
-change-password forms, and turns off the browser's own "Save password?" so only Vault asks.
+Vault in the browser, on its own: it signs in to the marobotic account, keeps the sealed vault from
+marobotic.dev and opens it in the browser, exactly like the Vault app on the PC and the phone. Each one
+syncs with the server by itself, so the app doesn't need to be running.
 
-The extension keeps no passwords. It talks to the running Vault app on `127.0.0.1:47350`, which:
+- **Fills** logins, 2FA codes and **passkeys**: suggestions open under username, password and code fields
+  on the site they belong to (arrow keys + Enter work), and `Ctrl+Shift+L` fills the best match.
+- **Saves** a login after you sign in with one Vault doesn't know (or **updates** a changed password),
+  and **saves passkeys** when a site makes one. Sites see Vault as a synced passkey provider.
+- **Suggests** a strong password in sign-up and change-password fields.
+- **Replaces the browser's password manager** (its "Save password?" is turned off).
+- **Popup**: *This site* (its logins, codes and passkeys) or *All items* with Logins / 2FA / Passkeys
+  filters, search, item details (copy, reveal, fill, edit, pin, delete), a new-login form with the
+  password generator, and **Settings** (each suggestion on or off, passkeys, saving, auto-lock, the
+  shortcut, never-save sites, sync, lock, sign out).
 
-- only answers browser extensions (web pages can't fake the `Origin` header; the `Host` must be 127.0.0.1),
-- answers nothing until you click **Allow** in Vault for that browser (Connect in the popup shows a code
-  that Vault shows too), and
-- looks a page's logins up only for the address the browser reports for that page: a login for
-  `github.com` is never offered on `github.com.evil.io`, a plain-`http` page, or a cross-site frame.
+## Security
+
+- The vault key lives in memory and in `chrome.storage.session` (memory only, cleared when the browser
+  closes) so the background worker can restart without asking again. Only the sealed vault is written
+  to disk. Auto-lock: when the browser closes, or after 5 min to 4 h without use.
+- Logins and codes are offered only on their own site (`src/domains.ts` in the app: registrable domain
+  plus a short list of sites that share a sign-in), only over https (or the local network), and only
+  for the address the browser reports for that frame; never for a look-alike.
+- Passkeys: `inject.js` (the page's world) hands `navigator.credentials` calls to Vault; Vault answers
+  only after a real click in its own panel (a closed shadow root the page can't reach), only in the top
+  frame, and only for an `rpId` that is the page's own site. "Use another device or key" goes to the
+  browser's own passkey flow.
 
 ## Build and install
 
@@ -18,19 +34,13 @@ The extension keeps no passwords. It talks to the running Vault app on `127.0.0.
 npm run build -w apps/vault-extension     # -> apps/vault-extension/dist
 ```
 
-`brave://extensions` (or `chrome://extensions`, `edge://extensions`) > **Developer mode** on > **Load
-unpacked** > choose `apps/vault-extension/dist`. The `key` in the manifest keeps its ID fixed
-(`dhonkedgjnngkclmpofnejkddphdbnkp`); the private key is in `~/.marobotic/keys/vault-extension.pem`,
-never in the repo. Then click the Vault icon > **Connect**, and **Allow** in the Vault app.
+`brave://extensions` (or `chrome://`, `edge://`) > **Developer mode** > **Load unpacked** > `dist`. The
+manifest `key` keeps the ID fixed (`dhonkedgjnngkclmpofnejkddphdbnkp`); its private key is in
+`~/.marobotic/keys/vault-extension.pem`, never in the repo. Then click the Vault icon and sign in.
 
-## Using it
+## End-to-end check
 
-- Click a username, password or 2FA-code field: Vault's list opens under it. Arrow keys + Enter work too.
-- `Ctrl+Shift+L` fills the best login (or the 2FA code, when a code field is focused).
-- New-password fields offer **Use a strong password** (filled into the confirm box too).
-- After signing in, **Save this login to Vault?** (or **Update the password?**) appears top right.
-  **Never for this site** is undone with **Ask again** at the bottom of the popup.
-- The popup: this site's logins (Fill, copy user, copy password) and codes (click to copy), search
-  everything, **Strong password** (copied), and the switch that hands password saving back to the browser.
-- Passwords already saved in the browser are still offered by it: import them into Vault
-  (export a CSV from the browser's password settings, Vault > Import), then delete them from the browser.
+`node build.mjs --e2e` builds the same extension against an in-memory account (`e2e/mock-account.ts`,
+password `test-pass`) into `e2e/dist`. `e2e/cdp.mjs` serves `e2e/page.html` (a login form, a 2FA field,
+passkey buttons that verify the signature) and drives a throwaway Edge/Brave profile over DevTools:
+`serve`, `launch <exe>`, `open`, `eval`, `click`, `key`, `type`, `shot` (run with `--experimental-websocket`).

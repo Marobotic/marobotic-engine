@@ -46,6 +46,24 @@
             </intent-filter>
             <meta-data android:name="android.autofill" android:resource="@xml/autofill_service" />
         </service>
+        <!-- Vault in Android's Credential Manager (14+): passkeys and passwords for apps and browsers -->
+        <service
+            android:name=".VaultCredentialService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="Vault"
+            android:icon="@mipmap/ic_launcher"
+            android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.credentials.CredentialProviderService" />
+            </intent-filter>
+            <meta-data android:name="android.credentials.provider" android:resource="@xml/credential_provider" />
+        </service>
+        <activity
+            android:name=".PasskeyActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity
             android:name=".AutofillAuthActivity"
             android:exported="false"

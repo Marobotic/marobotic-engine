@@ -3,12 +3,11 @@
 import { init, KDF_V1 } from "@marobotic/crypto";
 import { totp, normalizeEntry, base32Decode, type OtpEntry, type Algorithm } from "@marobotic/otp";
 import { importText, importPasswordCsv, type ImportResult } from "@marobotic/importers";
-import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem } from "../src/vault.ts";
+import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem, type PasskeyItem } from "../src/vault.ts";
 import { ffxivEntries, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
 import { siteOf } from "../src/icons.ts";
 import { MULTI, SAME_SIGN_IN, loginsFor, siteKey } from "../src/domains.ts";
-import * as bridge from "./bridge.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -212,6 +211,8 @@ function recoveryUnlockScreen(sealed: VaultFile, newPassword: string) {
 // ------------------------------------------------------------------ the vault: logins and 2FA codes
 type TotpRow = Item & { data: TotpItem };
 type LoginRow = Item & { data: LoginItem };
+type PasskeyRow = Item & { data: PasskeyItem };
+const passkeys = () => (vault?.list("passkey") ?? []) as PasskeyRow[];
 
 const otps = () => (vault?.list("totp") ?? []) as TotpRow[];
 const logins = () => (vault?.list("login") ?? []) as LoginRow[];
@@ -290,11 +291,10 @@ function settingsModal() {
             <div><b>Recovery kit</b><span>The only way back into your vault if your account password is reset. Making a new one stops the old one working.</span></div>
             <button class="m-btn compact" id="kit">New kit</button>
           </div>
-          ${platform.isDesktopApp ? `
           <div class="set">
-            <div><b>Browser extension</b><span id="ext"></span></div>
-            <button class="m-btn compact" id="forget">Disconnect all</button>
+            <div><b>Browser extension</b><span>Vault for Chrome, Brave and Edge signs in with this same account and syncs on its own (this app doesn't need to be open). It fills logins and 2FA codes, saves new logins and passkeys, and signs in with passkeys; they show up here too.</span></div>
           </div>
+          ${platform.isDesktopApp ? `
           <div class="set">
             <div><b>Open 2FA setup links</b><span>When a site offers "Add to authenticator app" (an otpauth:// link), it opens in Vault.</span></div>
             <span class="m-switch ${linksOn ? "on" : ""}" id="links" role="switch" tabindex="0"></span>
@@ -315,17 +315,8 @@ function settingsModal() {
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
   void platform.vaultPath().then((p) => ($("#path", back).textContent = p));
-  const ext = $("#ext", back);
-  if (ext) {
-    const showExt = () => {
-      const b = bridge.pairedBrowsers();
-      ext.textContent = b.length ? `Connected: ${b.map((x) => x.browser).join(", ")}. It fills logins and 2FA codes, saves new ones, and suggests strong passwords.`
-        : "Not connected yet. Add the Vault extension to Chrome, Brave or Edge, then click Connect in it while Vault is open.";
-      $<HTMLButtonElement>("#forget", back).disabled = !b.length;
-    };
-    showExt();
-    $("#forget", back).onclick = () => { if (confirm("Disconnect every browser? Each one has to connect again before it can fill.")) { bridge.forgetBrowsers(); showExt(); } };
-    const sw = $("#links", back);
+  const sw = $("#links", back);
+  if (sw) {
     sw.onclick = async () => {
       linksOn = !linksOn;
       localStorage.setItem("vault.links", linksOn ? "on" : "off");
@@ -337,8 +328,8 @@ function settingsModal() {
   if (af) {
     const showAf = () => {
       const st = platform.autofillState();
-      af.textContent = st === "on" ? "On: Vault offers your logins, strong new passwords and 2FA codes when you sign in to apps and websites, and asks to save new logins."
-        : st === "off" ? "Off: pick Vault as the autofill service so it can fill logins and 2FA codes everywhere. In Chrome, also turn on Settings > Autofill services > Autofill using another service."
+      af.textContent = st === "on" ? "On: Vault offers your logins, passkeys, strong new passwords and 2FA codes when you sign in to apps and websites, and saves new logins and passkeys."
+        : st === "off" ? "Off: pick Vault under Passwords, passkeys & autofill so it can fill logins, passkeys and 2FA codes everywhere. In Chrome, also turn on Settings > Autofill services > Autofill using another service."
         : "This Android version has no autofill service setting.";
       $<HTMLButtonElement>("#afSet", back).textContent = st === "on" ? "Change" : "Choose Vault";
     };
@@ -371,11 +362,13 @@ function renderList() {
   const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
   if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
+  const ps = passkeys().sort((a, b) => (a.data.rpName || a.data.rpId).localeCompare(b.data.rpName || b.data.rpId));
+  if (filter === "login") for (const i of ps) if (matchesQuery(`${i.data.rpName ?? ""} ${i.data.rpId} ${i.data.username}`)) rows.push(passkeyRow(i));
   const ff = new Set(ffxivEntries(ts.map((i) => i.data.otp)));
   if (filter === "totp") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) rows.push(codeRow(i, ff.has(i.data.otp)));
 
   if (!rows.length) {
-    const shown = filter === "totp" ? ts.length : ls.length;
+    const shown = filter === "totp" ? ts.length : ls.length + ps.length;
     const msg = shown ? "Nothing matches your search." : filter === "totp" ? "No 2FA codes yet." : "No passwords yet.";
     const hint = shown ? "" : filter === "totp" ? `Scan a QR code${platform.isDesktopApp ? " on your screen" : platform.isMobile ? " with the camera" : ""}, type a setup key, or import from Google Authenticator.` : "Add a login, or import passwords from your browser or another app.";
     list.replaceChildren(h(`<div class="empty"><div>${msg}</div>${hint ? `<div class="faint">${hint}</div>` : ""}
@@ -387,6 +380,24 @@ function renderList() {
   closeMenu();
   list.replaceChildren(...rows);
   tick();
+}
+
+/** A passkey made by the Vault browser extension (or on the phone): the site's name, the account, delete. */
+function passkeyRow(i: PasskeyRow): HTMLElement {
+  const d = i.data;
+  const row = h(`
+    <div class="item login passkey">
+      <span class="tileslot"></span>
+      ${whoLines(d.username || d.displayName || "", `Passkey · ${d.rpName || d.rpId}`, false)}
+      <div class="tools"><span class="kindtag">PASSKEY</span><button class="m-btn subtle compact" data-del title="Delete">&#xf1f8;</button></div>
+    </div>`).firstElementChild as HTMLElement;
+  row.querySelector(".tileslot")!.replaceWith(entryIcon(d.rpName || d.rpId, siteKey(d.rpId)));
+  row.title = `Signs you in on ${d.rpId}${d.created ? ` · saved ${new Date(d.created).toLocaleDateString()}` : ""}. Passkeys are used by the Vault browser extension and by Vault on Android.`;
+  row.querySelector<HTMLElement>("[data-del]")!.onclick = async () => {
+    if (!confirm(`Delete the passkey for ${d.rpId} (${d.username})? Make sure you can still sign in there another way.`)) return;
+    vault!.remove(i.id); await save(); renderList();
+  };
+  return row;
 }
 
 async function togglePin(i: LoginRow | TotpRow) {
@@ -916,12 +927,21 @@ function refreshAutofill() {
       };
     }),
     codes: cs.map((c) => ({ id: c.id, issuer: nameOf(c), account: c.data.otp.account, words: [word(c.data.otp.issuer), word(nameOf(c))].filter((w) => w.length > 2), otp: otpOf(c.data.otp) })),
+    passkeys: passkeys().map((p) => ({ id: p.id, rpId: p.data.rpId, credentialId: p.data.credentialId, userHandle: p.data.userHandle, username: p.data.username, displayName: p.data.displayName ?? "", privateKeyPkcs8: p.data.privateKeyPkcs8 })),
   });
 }
 
 /** Logins Android asked to save ("Save to Vault?") while signing in somewhere: kept when the vault is open. */
 async function takeAndroidSaves() {
   if (!vault) return;
+  const made = platform.takePasskeys();
+  for (const p of made) {
+    const item = p as unknown as PasskeyItem;
+    if (item.type !== "passkey" || passkeys().some((x) => x.data.credentialId === item.credentialId)) continue;
+    vault.add(item);
+    toast(`Passkey saved · ${item.rpName || item.rpId}`);
+  }
+  if (made.length) { await save(); renderList(); }
   const saves = platform.takeSaves();
   for (const s of saves) {
     if (!s.password) continue;
@@ -939,44 +959,7 @@ async function takeAndroidSaves() {
   if (saves.length) { await save(); renderList(); }
 }
 
-// ------------------------------------------------------------------ browser extension (Windows)
-function approvePair(code: string, browser: string): Promise<boolean> {
-  void platform.showWindow();
-  return new Promise((done) => {
-    const back = h(`
-      <div class="backdrop">
-        <div class="m-modal modal">
-          <header>Connect ${esc(browser)}?</header>
-          <div class="content">
-            <p class="sans">The Vault extension in <b>${esc(browser)}</b> wants to fill your logins and 2FA codes. Allow it only if it shows this same code:</p>
-            <div class="kit">${esc(code)}</div>
-          </div>
-          <footer><span class="grow"></span><button class="m-btn" id="no">Don't allow</button><button class="m-btn primary" id="yes">Allow</button></footer>
-        </div>
-      </div>`).firstElementChild as HTMLElement;
-    document.body.append(back);
-    const end = (ok: boolean) => { back.remove(); done(ok); if (ok) toast(`${browser} connected`); };
-    $("#yes", back).onclick = () => end(true);
-    $("#no", back).onclick = () => end(false);
-    setTimeout(() => back.isConnected && end(false), 90_000);
-  });
-}
-
-const bridgeContext: bridge.BridgeContext = {
-  vault: () => vault,
-  save: async () => { await save(); renderList(); },
-  approvePair,
-  notify: toast,
-};
-
 // ------------------------------------------------------------------ start
-// The browser extension asks through the native side; each answer goes back with its id.
-platform.on("bridge", async (p) => {
-  const { id, body } = p as { id: number; body: string };
-  let res: unknown;
-  try { res = await bridge.handle(bridgeContext, JSON.parse(body) as Record<string, unknown>); } catch (e) { res = { error: String((e as Error)?.message ?? e) }; }
-  await platform.bridgeReply(id, res);
-});
 // An otpauth:// link opened while Vault runs (Windows: a second start; Android: MainActivity).
 platform.on("link", (p) => { void platform.showWindow(); offerLink(String(p)); });
 addEventListener("vault-link", async () => { const l = await platform.takeLaunchLink(); if (l) offerLink(l); });

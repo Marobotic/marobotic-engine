@@ -46,8 +46,7 @@ export async function setLinkHandler(on: boolean): Promise<void> {
   if (isDesktopApp) await tauri!<void>("set_link_handler", { on });
 }
 
-/** Something from the native side: "link" (an otpauth:// link Vault was opened with) and "bridge"
- *  (a request from the browser extension). */
+/** Something from the native side: "link" is an otpauth:// link Vault was opened with. */
 export function on(event: string, cb: (payload: unknown) => void) {
   void T?.event?.listen?.(event, (e) => cb(e.payload));
 }
@@ -59,12 +58,7 @@ export async function takeLaunchLink(): Promise<string | null> {
   return null;
 }
 
-/** The answer to one browser-extension request. */
-export async function bridgeReply(id: number, body: unknown): Promise<void> {
-  if (isDesktopApp) await tauri!<void>("bridge_reply", { id, json: JSON.stringify(body) });
-}
-
-/** Bring the window to the front (an extension asking to pair, an otpauth link). */
+/** Bring the window to the front (an otpauth link). */
 export async function showWindow(): Promise<void> {
   if (isDesktopApp) await tauri!<void>("show_window");
 }
@@ -76,6 +70,7 @@ type AndroidBridge = {
   setAutofill(json: string): void;
   clearAutofill(): void;
   takeSaves(): string;
+  takePasskeys(): string;
   takeLink(): string;
   autofillState(): string;           // "on" | "off" | "unsupported"
   openAutofillSettings(): void;
@@ -91,6 +86,11 @@ export type SaveRequest = { url: string; app: string; username: string; password
 export function takeSaves(): SaveRequest[] {
   if (!android) return [];
   try { return JSON.parse(android.takeSaves() || "[]") as SaveRequest[]; } catch { return []; }
+}
+/** Passkeys Android's credential manager made in Vault (items ready for the vault). */
+export function takePasskeys(): Record<string, unknown>[] {
+  if (!android) return [];
+  try { return JSON.parse(android.takePasskeys() || "[]") as Record<string, unknown>[]; } catch { return []; }
 }
 export const autofillState = () => (android ? android.autofillState() : "unsupported");
 export const openAutofillSettings = () => android?.openAutofillSettings();

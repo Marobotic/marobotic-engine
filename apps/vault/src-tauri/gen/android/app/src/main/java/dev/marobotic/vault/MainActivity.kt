@@ -51,6 +51,7 @@ class MainActivity : TauriActivity() {
     }
     @JavascriptInterface fun clearAutofill() = AutofillStore.clear()
     @JavascriptInterface fun takeSaves(): String = AutofillStore.takeSaves()
+    @JavascriptInterface fun takePasskeys(): String = AutofillStore.takePasskeys()
     @JavascriptInterface fun takeLink(): String = AutofillStore.pendingLink.also { AutofillStore.pendingLink = null } ?: ""
     @JavascriptInterface fun autofillState(): String {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return "unsupported"
@@ -62,7 +63,9 @@ class MainActivity : TauriActivity() {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
       runOnUiThread {
         try {
-          startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).setData(Uri.parse("package:$packageName")))
+          // Android 14+: one place for passwords, passkeys and autofill (Vault is both there).
+          if (Build.VERSION.SDK_INT >= 34) startActivity(Intent(Settings.ACTION_CREDENTIAL_PROVIDER).setData(Uri.parse("package:$packageName")))
+          else startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).setData(Uri.parse("package:$packageName")))
         } catch (_: Exception) {
           startActivity(Intent(Settings.ACTION_SETTINGS))
         }

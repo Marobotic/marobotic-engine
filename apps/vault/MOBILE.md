@@ -24,6 +24,12 @@ alias `marobotic`) via `src-tauri/gen/android/keystore.properties`. Install on t
   keeps new logins. It only works from memory while Vault is unlocked (`AutofillStore.kt`, filled by
   `ui/platform.ts` > `setAutofill`); when locked, the entry *Vault is locked* opens Vault to unlock
   and then fills. Chrome on Android also needs *Settings > Autofill services > Autofill using another service*.
+- **Passkeys and passwords in Credential Manager** (Android 14+, `VaultCredentialService.kt`,
+  `PasskeyActivity.kt`, `Passkeys.kt`): Vault saves new passkeys and signs in with them in apps and
+  browsers, the same format as the browser extension. A browser's page origin is trusted only from the
+  browsers on Google's list (`res/raw/privileged_browsers.json`, from gstatic); any other app must be
+  named in the site's `/.well-known/assetlinks.json`. Settings > *Choose Vault* opens *Passwords,
+  passkeys & autofill*. Not yet: a fingerprint prompt before using a passkey.
 - **Camera**: Add > *Scan with the camera* (getUserMedia + jsQR; the CAMERA permission is asked on first use).
 - **otpauth:// links** open Vault (intent filter on `MainActivity`), which asks before adding the code.
 

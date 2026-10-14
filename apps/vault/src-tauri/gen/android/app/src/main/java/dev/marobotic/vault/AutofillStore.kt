@@ -15,13 +15,15 @@ object AutofillStore {
     class Otp(val secret: String, val digits: Int, val period: Int, val algorithm: String)
     class Login(val id: String, val name: String, val username: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?)
     class Code(val id: String, val issuer: String, val account: String, val words: List<String>, val otp: Otp)
-    class Index(val logins: List<Login>, val codes: List<Code>, val multi: Set<String>, val groups: Map<String, String>)
+    class Passkey(val id: String, val rpId: String, val credentialId: String, val userHandle: String, val username: String, val displayName: String, val privateKeyPkcs8: String)
+    class Index(val logins: List<Login>, val codes: List<Code>, val multi: Set<String>, val groups: Map<String, String>, val passkeys: List<Passkey>)
     class Save(val url: String, val app: String, val username: String, val password: String)
 
     @Volatile var index: Index? = null
         private set
     @Volatile var pendingLink: String? = null
     private val saves = mutableListOf<Save>()
+    private val madePasskeys = mutableListOf<JSONObject>()
     val onUnlock = CopyOnWriteArrayList<() -> Unit>()
 
     fun set(json: String) {
@@ -38,14 +40,28 @@ object AutofillStore {
             val otp = it.optJSONObject("otp")?.toOtp() ?: return@mapNotNull null
             Code(it.getString("id"), it.optString("issuer"), it.optString("account"), it.optJSONArray("words")?.strings() ?: emptyList(), otp)
         } ?: emptyList()
+        val passkeys = o.optJSONArray("passkeys")?.objects()?.map {
+            Passkey(it.getString("id"), it.getString("rpId"), it.getString("credentialId"), it.getString("userHandle"),
+                it.optString("username"), it.optString("displayName"), it.getString("privateKeyPkcs8"))
+        } ?: emptyList()
         val wasLocked = index == null
-        index = Index(logins, codes, multi, groups)
+        // Passkeys made here but not yet taken in by Vault's window stay usable.
+        val waiting = synchronized(madePasskeys) { madePasskeys.map { it.toPasskey("new") } }
+        index = Index(logins, codes, multi, groups, passkeys + waiting.filter { w -> passkeys.none { it.credentialId == w.credentialId } })
         if (wasLocked) onUnlock.forEach { it() }
     }
 
     fun clear() { index = null }
 
     fun addSave(s: Save) = synchronized(saves) { saves.add(s) }
+
+    /** A passkey made by Android's credential manager: usable at once, kept in the vault by the window. */
+    fun addPasskey(item: JSONObject) {
+        synchronized(madePasskeys) { madePasskeys.add(item) }
+        index?.let { i -> index = Index(i.logins, i.codes, i.multi, i.groups, i.passkeys + item.toPasskey("new")) }
+    }
+    fun takePasskeys(): String = synchronized(madePasskeys) { JSONArray(madePasskeys).toString().also { madePasskeys.clear() } }
+    private fun JSONObject.toPasskey(id: String) = Passkey(id, getString("rpId"), getString("credentialId"), getString("userHandle"), optString("username"), optString("displayName"), getString("privateKeyPkcs8"))
 
     fun takeSaves(): String = synchronized(saves) {
         val a = JSONArray()

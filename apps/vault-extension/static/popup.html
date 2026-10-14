@@ -6,16 +6,8 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <header>
-    <span class="brand"><span class="logo">&#xf023;</span> Vault</span>
-    <span class="state" id="state"></span>
-    <button class="icon" id="openApp" title="Open the Vault app">&#xf08e;</button>
-  </header>
-  <main id="main"><div class="msg">Connecting…</div></main>
-  <footer id="foot" hidden>
-    <label class="opt"><span class="sw" id="takeover" role="switch" tabindex="0"></span> Vault is this browser's password manager</label>
-    <button id="gen">&#xf084; Strong password</button>
-  </footer>
+  <div id="app"><div class="msg">Opening…</div></div>
+  <div id="toast" hidden></div>
   <script src="popup.js"></script>
 </body>
 </html>

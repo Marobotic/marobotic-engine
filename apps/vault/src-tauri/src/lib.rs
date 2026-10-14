@@ -7,8 +7,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
-#[cfg(desktop)]
-mod bridge;
 
 fn vault_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -153,15 +151,6 @@ fn take_launch_link(state: tauri::State<LaunchLink>) -> Option<String> {
     state.0.lock().ok()?.take()
 }
 
-/// The window's answer to one browser-extension request (see bridge.rs).
-#[tauri::command]
-fn bridge_reply(app: tauri::AppHandle, id: u64, json: String) {
-    #[cfg(desktop)]
-    bridge::reply(&app, id, json);
-    #[cfg(not(desktop))]
-    let _ = (app, id, json);
-}
-
 #[tauri::command]
 fn show_window(app: tauri::AppHandle) {
     #[cfg(desktop)]
@@ -172,7 +161,7 @@ fn show_window(app: tauri::AppHandle) {
 
 /// Bring the window back from the tray (or from behind other windows).
 #[cfg(desktop)]
-pub(crate) fn show_main(app: &tauri::AppHandle) {
+fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -219,12 +208,7 @@ pub fn run() {
                 let _ = app.emit_to("main", "link", link);
             }
         }))
-        .manage(bridge::Pending::default())
-        .setup(|app| {
-            tray(app)?;
-            bridge::start(app.handle().clone());
-            Ok(())
-        })
+        .setup(|app| Ok(tray(app)?))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -233,7 +217,7 @@ pub fn run() {
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window, bridge_reply
+            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");

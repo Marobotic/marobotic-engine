@@ -14,8 +14,9 @@ apps/
     src/vault.ts        items sealed one by one, recovery kit, two-device merge
     src/xivlauncher.ts  sends the FFXIV code to XIVLauncher (port 4646) when it asks
     src/domains.ts      which logins/codes belong to a page or app (the phishing guard)
-    ui/bridge.ts        the browser extension's requests, answered by the open vault
-  vault-extension/  Vault for Chrome/Brave/Edge: fill logins + 2FA codes, save new logins, strong passwords
+    src/passkeys.ts     WebAuthn passkeys made and used by Vault (ES256, synced)
+  vault-extension/  Vault for Chrome/Brave/Edge, standalone: signs in, syncs, fills logins/2FA/passkeys,
+                    saves logins and passkeys, Proton-Pass-style popup with settings
   letterbox/   Letterbox: the mail client on the Zoho mailbox, live at marobotic.dev/letterbox
 ```
 

@@ -4,7 +4,7 @@
 // save a login after you sign in with one Vault doesn't know yet. Everything is drawn in a closed
 // shadow root, so the page can neither style nor read it.
 import { generatePassword } from "../../vault/src/passwords.ts";
-import { send, type CodeHit, type LoginHit, type Matches, type Offer } from "./messages.ts";
+import { send, type CodeHit, type LoginHit, type Matches, type Offer, type PasskeyHit, type PkCreate, type PkGet, type Settings } from "./messages.ts";
 
 type Kind = "username" | "password" | "newPassword" | "otp";
 
@@ -124,6 +124,9 @@ button:hover { background: #2a2a2a; }
 button.primary { background: #B14242; border-color: #B14242; color: #fff; font-weight: 700; }
 button.primary:hover { background: #c05555; }
 button.quiet { border: 0; color: #969696; }
+.tag { font-size: 10px; letter-spacing: 1px; color: #F0BE66; border: 1px solid #5a4a2a; padding: 1px 5px; }
+.bar.pk .list { display: grid; gap: 2px; max-height: 240px; overflow-y: auto; }
+.bar.pk .list:empty { display: none; }
 `;
 
 let host: HTMLElement | null = null;
@@ -192,48 +195,49 @@ async function matches(fresh = false): Promise<Matches> {
   cache = { at: Date.now(), data };
   return data;
 }
+let prefs: Settings | null = null;
+const settings = async () => (prefs ??= await send<Settings>({ t: "settings" }).catch(() => null)) ?? ({ suggest: true, suggestCodes: true, suggestPasswords: true } as Settings);
 
 const loginHtml = (l: LoginHit) => `<div class="txt"><b>${esc(l.username || l.name)}</b><span>${esc(l.name)}${l.site ? ` · ${esc(l.site)}` : ""}</span></div>`;
+const passkeyHtml = (p: PasskeyHit) => `<div class="txt"><b>${esc(p.username || p.displayName)}</b><span>Passkey · ${esc(p.rpId)}</span></div><div class="tag">PASSKEY</div>`;
 const codeHtml = (c: CodeHit) => `<div class="txt"><b>${esc(c.account || c.issuer)}</b><span>${esc(c.issuer)}</span></div>
   <div class="code ${c.remaining <= 5 ? "low" : ""}">${esc(c.code.length === 6 ? `${c.code.slice(0, 3)} ${c.code.slice(3)}` : c.code)}</div>
   <div class="ring"><i style="height:${Math.round((c.remaining / c.period) * 100)}%"></i></div>`;
-
-function problem(m: Matches, msg: (t: string) => void, add: (h: string, run: () => void) => void): boolean {
-  if (m.locked) { add(`<div class="txt"><b>Vault is locked</b><span>Open Vault and sign in, then come back</span></div>`, () => void send({ t: "open" })); return true; }
-  if (m.error === "unpaired") { msg("Connect this browser: click the Vault icon in the toolbar."); return true; }
-  if (m.error) return true;
-  return false;
-}
+const lockedHtml = `<div class="txt"><b>Vault is locked</b><span>Click to unlock in the toolbar</span></div>`;
+const unlock = () => void send({ t: "openPopup" });
 
 async function offerFor(field: HTMLInputElement, why: "focus" | "click") {
   const kind = kindOf(field);
   if (!kind) return;
+  const s = await settings();
   const m = await matches(kind === "otp");
-  if (document.activeElement !== field) return;
+  if (document.activeElement !== field || m.error) return;
   const logins = m.logins ?? [], codes = m.codes ?? [];
 
   if (kind === "otp") {
-    if (!codes.length && !m.locked && why === "focus") return;
+    if (!s.suggestCodes || (!codes.length && !m.locked && why === "focus")) return;
     return openBox(field, "2FA code", (add, msg) => {
-      if (problem(m, msg, add)) return;
+      if (m.locked) return add(lockedHtml, unlock);
       if (!codes.length) return msg("No 2FA code saved for this site.");
       for (const c of codes) add(codeHtml(c), async () => { const r = await send<{ code?: string }>({ t: "code", id: c.id }); if (r.code) fillCode(r.code, field); });
     });
   }
 
   if (kind === "newPassword") {
+    if (!s.suggestPasswords && !logins.length) return;
     const pw = generatePassword({ length: 20 });
     return openBox(field, "new password", (add) => {
-      add(`<div class="txt"><b>Use a strong password</b><span class="pw">${esc(pw)}</span></div>`, () => fillNewPassword(pw, field));
-      if (!m.error && !m.locked) for (const l of logins) add(loginHtml(l), () => void fillFrom(l.id, field));
+      if (s.suggestPasswords) add(`<div class="txt"><b>Use a strong password</b><span class="pw">${esc(pw)}</span></div>`, () => fillNewPassword(pw, field));
+      if (!m.locked) for (const l of logins) add(loginHtml(l), () => void fillFrom(l.id, field));
     });
   }
 
-  // username / password
-  if (!logins.length && !m.locked && !(m.error === "unpaired" && kind === "password")) return;
-  if (m.error && m.error !== "unpaired") return;
-  openBox(field, "sign in", (add, msg) => {
-    if (problem(m, msg, add)) return;
+  // username / password: a waiting passkey sign-in first, then the saved logins
+  const keys = conditional && kind === "username" ? (m.passkeys ?? []) : [];
+  if (!logins.length && !keys.length && !(m.locked && (s.suggest || conditional))) return;
+  openBox(field, "sign in", (add) => {
+    if (m.locked) return add(lockedHtml, unlock);
+    for (const p of keys) add(passkeyHtml(p), () => void usePasskey(p.id));
     for (const l of logins) add(loginHtml(l), () => void fillFrom(l.id, field));
   });
 }
@@ -302,15 +306,16 @@ function offerSave(o: Offer) {
   const update = o.state === "changed";
   barEl.innerHTML = `<div class="t">${update ? "Update the password in Vault?" : "Save this login to Vault?"}</div>
     <div class="s">${esc(o.username || "(no username)")} · ${esc(o.name ?? o.site)}</div>
-    <div class="row"><button class="quiet" data-x>Not now</button>${update ? "" : `<button data-never>Never for this site</button>`}<button class="primary" data-save>${update ? "Update" : "Save"}</button></div>`;
+    <div class="row"><button class="quiet" data-x>Not now</button>${update ? "" : `<button data-never>Never here</button>`}<button class="primary" data-save>${update ? "Update" : "Save"}</button></div>`;
   const done = () => { barEl?.remove(); barEl = null; };
   barEl.querySelector<HTMLElement>("[data-x]")!.onclick = done;
-  barEl.querySelector<HTMLElement>("[data-never]")?.addEventListener("click", () => { void send({ t: "save", id: o.id, decision: "never" }); done(); });
-  barEl.querySelector<HTMLElement>("[data-save]")!.onclick = async () => {
+  barEl.querySelector<HTMLElement>("[data-never]")?.addEventListener("click", (e) => { if (!e.isTrusted) return; void send({ t: "save", id: o.id, decision: "never" }); done(); });
+  barEl.querySelector<HTMLElement>("[data-save]")!.onclick = async (e) => {
+    if (!e.isTrusted) return;
     const res = await send<{ saved?: string; error?: string; locked?: boolean }>({ t: "save", id: o.id, decision: "save" });
     const s = barEl?.querySelector(".s");
     if (res.saved) { done(); cache = null; }
-    else if (s) s.textContent = res.locked ? "Vault is locked: open it and sign in, then sign in here again." : `Couldn't save: ${res.error ?? "Vault isn't running"}`;
+    else if (s) s.textContent = res.locked ? "Vault is locked: unlock it in the toolbar, then sign in here again." : `Couldn't save: ${res.error ?? "try again"}`;
   };
   r.append(barEl);
   setTimeout(() => barEl?.isConnected && done(), 45_000);
@@ -340,3 +345,81 @@ async function fillBest() {
 }
 
 if (window === top) void send<Offer | null>({ t: "pending" }).then((o) => o && offerSave(o)).catch(() => {});
+
+// ------------------------------------------------------------------ passkeys (from inject.ts in the page)
+type PkReq = { __vault: "req"; id: number; kind: "create" | "get"; options: PkCreate | PkGet; conditional: boolean };
+let conditional: { id: number; options: PkGet } | null = null;
+let panel: HTMLElement | null = null;
+
+const answer = (id: number, result: Record<string, unknown>) => window.postMessage({ __vault: "res", id, result }, location.origin);
+const closePanel = () => { panel?.remove(); panel = null; };
+
+/** Vault's own panel, out of the page's reach: only a real click on it counts. */
+function showPanel(title: string, sub: string, build: (row: HTMLElement, done: () => void) => void, onCancel: () => void) {
+  closePanel();
+  const r = shadow();
+  panel = document.createElement("div");
+  panel.className = "bar pk";
+  panel.innerHTML = `<div class="t">${esc(title)}</div><div class="s">${esc(sub)}</div><div class="list"></div><div class="row"></div>`;
+  const row = panel.querySelector<HTMLElement>(".row")!;
+  build(panel.querySelector<HTMLElement>(".list")!, closePanel);
+  const other = document.createElement("button");
+  other.className = "quiet";
+  other.textContent = "Use another device or key";
+  other.onclick = (e) => { if (!e.isTrusted) return; closePanel(); onCancel(); };
+  row.prepend(other);
+  r.append(panel);
+}
+const trusted = (fn: () => void) => (e: MouseEvent) => { if (e.isTrusted) fn(); };
+function button(text: string, cls: string, fn: () => void) {
+  const b = document.createElement("button");
+  b.className = cls;
+  b.textContent = text;
+  b.onclick = trusted(fn);
+  return b;
+}
+
+async function usePasskey(id: number | string) {
+  if (!conditional) return;
+  const c = conditional;
+  conditional = null;
+  answer(c.id, await send({ t: "pkGet", options: c.options, id: String(id) }) as Record<string, unknown>);
+}
+
+window.addEventListener("message", async (e) => {
+  const d = e.data as PkReq | { __vault: "abort"; id: number };
+  if (e.source !== window || !d || (d.__vault !== "req" && d.__vault !== "abort")) return;
+  if (d.__vault === "abort") { if (conditional?.id === d.id) conditional = null; closePanel(); return; }
+  type Check = { use: boolean; locked?: boolean; rpId?: string; username?: string; passkeys?: PasskeyHit[] };
+  const check = await send<Check>({ t: "pkCheck", kind: d.kind, options: d.options }).catch((): Check => ({ use: false }));
+  if (!check.use) return answer(d.id, { fallback: true });
+  if (d.conditional) {
+    if (check.locked || !check.passkeys?.length) return answer(d.id, { fallback: true });
+    conditional = { id: d.id, options: d.options as PkGet };
+    cache = null;
+    return;
+  }
+  const retry = () => window.dispatchEvent(new MessageEvent("message", { data: d, source: window }));
+  if (check.locked) {
+    return showPanel("Vault is locked", "Unlock Vault in the toolbar to use your passkeys here.", (row, done) => {
+      row.parentElement!.querySelector(".row")!.append(button("Unlock", "", unlock), button("Continue", "primary", () => { done(); retry(); }));
+    }, () => answer(d.id, { fallback: true }));
+  }
+  if (d.kind === "create") {
+    return showPanel("Save a passkey in Vault?", `${check.username ?? ""} · ${check.rpId ?? location.hostname}`, (row, done) => {
+      row.parentElement!.querySelector(".row")!.append(button("Save passkey", "primary", async () => {
+        done();
+        answer(d.id, await send({ t: "pkCreate", options: d.options as PkCreate }) as Record<string, unknown>);
+      }));
+    }, () => answer(d.id, { fallback: true }));
+  }
+  showPanel("Sign in with a passkey", location.hostname, (list, done) => {
+    for (const p of check.passkeys ?? []) {
+      const it = document.createElement("div");
+      it.className = "it";
+      it.innerHTML = passkeyHtml(p);
+      it.onclick = trusted(async () => { done(); answer(d.id, await send({ t: "pkGet", options: d.options as PkGet, id: p.id }) as Record<string, unknown>); });
+      list.append(it);
+    }
+  }, () => answer(d.id, { fallback: true }));
+});

@@ -57,6 +57,8 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .search { width: 100%; margin-bottom: 14px; }
 .item.login { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; padding: 11px 8px 10px 14px; border: 1px solid var(--border); border-left: 3px solid var(--teal); margin-bottom: 8px; background: var(--surface); transition: background-color 90ms var(--ease); }
 .item.login:hover { background: var(--surface2); }
+.item.login.passkey { border-left-color: #8A63D2; }
+.kindtag { align-self: center; font-size: 10px; letter-spacing: 1px; color: #b49be6; border: 1px solid #4a3a6e; padding: 1px 6px; margin-right: 4px; }
 .item.login .tools { display: flex; gap: 2px; }
 .item.login .actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .mini { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer; font: inherit; }

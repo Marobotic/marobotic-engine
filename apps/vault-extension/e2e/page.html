@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Vault e2e page</title>
+<style>body{font:14px sans-serif;margin:30px;display:grid;gap:10px;max-width:360px} input{height:30px} pre{white-space:pre-wrap;font-size:11px}</style></head>
+<body>
+  <h3>Sign in</h3>
+  <form id="login" onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'submitted ' + user.value">
+    <input id="user" name="username" autocomplete="username" placeholder="Username">
+    <input id="pass" name="password" type="password" autocomplete="current-password" placeholder="Password">
+    <button id="go" type="submit">Sign in</button>
+  </form>
+  <input id="otp" name="otp" autocomplete="one-time-code" placeholder="2FA code" inputmode="numeric">
+  <h3>Passkeys</h3>
+  <button id="reg">Create passkey</button>
+  <button id="auth">Sign in with passkey</button>
+  <pre id="out"></pre>
+<script>
+  const out = document.getElementById("out");
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  window.lastPub = null;
+  document.getElementById("reg").onclick = async () => {
+    try {
+      const c = await navigator.credentials.create({ publicKey: {
+        rp: { name: "Local test" }, user: { id: new TextEncoder().encode("uid-1"), name: "tester", displayName: "Tester" },
+        challenge: crypto.getRandomValues(new Uint8Array(32)), pubKeyCredParams: [{ type: "public-key", alg: -7 }] } });
+      window.lastPub = { id: c.id, spki: c.response.getPublicKey() };
+      out.textContent = "created " + c.id + " instanceof=" + (c instanceof PublicKeyCredential) + " alg=" + c.response.getPublicKeyAlgorithm();
+    } catch (e) { out.textContent = "create error " + e.name + ": " + e.message; }
+  };
+  document.getElementById("auth").onclick = async () => {
+    try {
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+      const c = await navigator.credentials.get({ publicKey: { challenge } });
+      const r = c.response;
+      const cd = JSON.parse(new TextDecoder().decode(r.clientDataJSON));
+      let verified = "no key";
+      if (window.lastPub) {
+        const key = await crypto.subtle.importKey("spki", window.lastPub.spki, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+        const der = new Uint8Array(r.signature); let i = 2;
+        const part = () => { const len = der[i + 1]; let v = der.slice(i + 2, i + 2 + len); i += 2 + len; while (v.length > 32) v = v.slice(1); const o = new Uint8Array(32); o.set(v, 32 - v.length); return o; };
+        const raw = new Uint8Array([...part(), ...part()]);
+        const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", r.clientDataJSON));
+        verified = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, raw, new Uint8Array([...new Uint8Array(r.authenticatorData), ...hash]));
+      }
+      out.textContent = "signed in " + c.id + " user=" + new TextDecoder().decode(r.userHandle) + " challengeOk=" + (cd.challenge === b64(challenge)) + " origin=" + cd.origin + " verified=" + verified;
+    } catch (e) { out.textContent = "get error " + e.name + ": " + e.message; }
+  };
+</script>
+</body>
+</html>

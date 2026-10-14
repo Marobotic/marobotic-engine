@@ -8,7 +8,10 @@ import type { OtpEntry } from "@marobotic/otp";
 
 export type TotpItem = { type: "totp"; otp: OtpEntry; label?: string; notes?: string; favorite?: boolean };
 export type LoginItem = { type: "login"; name: string; urls: string[]; username: string; password: string; totpId?: string; notes?: string; favorite?: boolean };
-export type PasskeyItem = { type: "passkey"; rpId: string; credentialId: string; userHandle: string; username: string; privateKeyPkcs8: string; counter: number };
+export type PasskeyItem = {
+  type: "passkey"; rpId: string; credentialId: string; userHandle: string; username: string; privateKeyPkcs8: string; counter: number;
+  displayName?: string; rpName?: string; created?: number; favorite?: boolean;
+};
 export type NoteItem = { type: "note"; title: string; body: string };
 export type ItemData = TotpItem | LoginItem | PasskeyItem | NoteItem;
 export type Item = { id: string; updated: number; data: ItemData };
@@ -57,6 +60,15 @@ export class Vault {
     try { key = unwrapVaultKey(recoveryKeyFrom(recoveryCode), file.byRecovery); } catch { throw new Error("that recovery code does not open this vault"); }
     return Vault.load(file, key, clock);
   }
+
+  /** Opened again with the vault key itself (the browser extension keeps it in memory-only session
+   *  storage between restarts of its background worker). */
+  static withKey(file: VaultFile, key: Uint8Array, clock: () => number = Date.now): Vault {
+    try { return Vault.load(file, key, clock); } catch { throw new Error("wrong key"); }
+  }
+  /** The vault key, for withKey(). Never written anywhere that outlives the browser session. */
+  keyBytes(): Uint8Array { return this.key; }
+  get email(): string { return this.file.email; }
 
   private static load(file: VaultFile, key: Uint8Array, clock: () => number): Vault {
     const { items, ...head } = file;
