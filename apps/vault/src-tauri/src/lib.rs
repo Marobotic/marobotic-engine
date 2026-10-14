@@ -139,6 +139,82 @@ fn set_link_handler(on: bool) -> Result<(), String> {
 #[tauri::command]
 fn set_link_handler(_on: bool) {}
 
+/// Windows: Brave, Chrome and Edge stop offering and filling their own saved passwords (and their
+/// address and card autofill), so only Vault suggests anything. A browser keeps filling passwords it
+/// saved before even with "Offer to save" off; its PasswordManagerEnabled policy is the switch for that.
+/// Policies can only be written by an administrator, so this asks once (UAC) and writes them for the
+/// whole PC. Nothing saved in the browser is deleted; it shows "managed by your organization" while on.
+#[cfg(windows)]
+const BROWSERS: [(&str, &str, &str); 3] = [
+    ("Brave", r"BraveSoftware\Brave-Browser", r"SOFTWARE\Policies\BraveSoftware\Brave"),
+    ("Chrome", r"Google\Chrome", r"SOFTWARE\Policies\Google\Chrome"),
+    ("Edge", r"Microsoft\Edge", r"SOFTWARE\Policies\Microsoft\Edge"),
+];
+#[cfg(windows)]
+const LOCKDOWN_VALUES: [&str; 3] = ["PasswordManagerEnabled", "AutofillAddressEnabled", "AutofillCreditCardEnabled"];
+
+#[cfg(windows)]
+fn installed_browsers() -> Vec<(&'static str, &'static str)> {
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    BROWSERS.iter().filter(|(_, dir, _)| std::path::Path::new(&local).join(dir).exists()).map(|(n, _, k)| (*n, *k)).collect()
+}
+
+/// Which installed browsers have their own password manager turned off (read from the registry).
+#[cfg(windows)]
+#[tauri::command]
+fn browser_lockdown_state() -> Vec<(String, bool)> {
+    use std::os::windows::process::CommandExt;
+    installed_browsers().into_iter().map(|(name, key)| {
+        let out = std::process::Command::new("reg").args(["query", &format!(r"HKLM\{key}"), "/v", "PasswordManagerEnabled"])
+            .creation_flags(0x0800_0000).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        (name.to_string(), out.contains("0x0"))
+    }).collect()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn set_browser_lockdown(on: bool) -> Result<Vec<String>, String> {
+    use std::os::windows::process::CommandExt;
+    let browsers = installed_browsers();
+    if browsers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut script = String::from("@echo off\r\n");
+    for (_, key) in &browsers {
+        for value in LOCKDOWN_VALUES {
+            script += &if on {
+                format!("reg add \"HKLM\\{key}\" /v {value} /t REG_DWORD /d 0 /f\r\n")
+            } else {
+                format!("reg delete \"HKLM\\{key}\" /v {value} /f\r\n")
+            };
+        }
+    }
+    let path = std::env::temp_dir().join("vault-browser-lockdown.cmd");
+    std::fs::write(&path, script).map_err(|e| e.to_string())?;
+    // One UAC prompt; declining it is an error the window reports.
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command",
+            &format!("Start-Process -FilePath cmd.exe -ArgumentList '/c \"{}\"' -Verb RunAs -Wait -WindowStyle Hidden", path.display())])
+        .creation_flags(0x0800_0000).status().map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&path);
+    if !status.success() {
+        return Err("Windows didn't allow it (the administrator prompt was declined)".into());
+    }
+    Ok(browsers.iter().map(|(n, _)| n.to_string()).collect())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn browser_lockdown_state() -> Vec<(String, bool)> {
+    Vec::new()
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn set_browser_lockdown(_on: bool) -> Vec<String> {
+    Vec::new()
+}
+
 /// The otpauth:// link Vault was started with (Windows), handed to the window once.
 struct LaunchLink(std::sync::Mutex<Option<String>>);
 
@@ -217,7 +293,7 @@ pub fn run() {
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window
+            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");

@@ -176,7 +176,7 @@ function openBox(field: HTMLInputElement, head: string, build: (add: (html: stri
       const el = document.createElement("div");
       el.className = "it";
       el.innerHTML = html;
-      el.onclick = () => { closeBox(); run(); };
+      el.onclick = () => { quiet(); run(); };
       box!.append(el);
       items.push({ el, run });
     },
@@ -206,54 +206,87 @@ const codeHtml = (c: CodeHit) => `<div class="txt"><b>${esc(c.account || c.issue
 const lockedHtml = `<div class="txt"><b>Vault is locked</b><span>Click to unlock in the toolbar</span></div>`;
 const unlock = () => void send({ t: "openPopup" });
 
-async function offerFor(field: HTMLInputElement, why: "focus" | "click") {
+/** Which saved logins fit a field right now. The list follows what is typed ("maro" -> maro@…); a
+ *  password field whose username is already filled in offers that account's password only. Nothing
+ *  fits, nothing shows. */
+function fitting(field: HTMLInputElement, kind: Kind, logins: LoginHit[]): LoginHit[] {
+  const typed = field.value.trim().toLowerCase();
+  if (kind === "username") {
+    if (!typed) return logins;
+    return logins.filter((l) => { const u = l.username.toLowerCase(); return u !== typed && (u.startsWith(typed) || u.includes(typed) || l.name.toLowerCase().startsWith(typed)); });
+  }
+  if (typed) return [];                                         // a password is already there
+  const user = userFieldFor(scopeOf(field), field)?.value.trim().toLowerCase() ?? "";
+  if (!user) return logins;
+  const exact = logins.filter((l) => l.username.toLowerCase() === user);
+  return exact.length ? exact : logins.filter((l) => l.username.toLowerCase().startsWith(user));
+}
+
+/** Right after Vault fills a field (or the list is dismissed), focus moving around doesn't reopen it. */
+let quietUntil = 0;
+let dismissed: HTMLInputElement | null = null;
+const quiet = (ms = 1500) => { quietUntil = Date.now() + ms; closeBox(); };
+
+async function offerFor(field: HTMLInputElement, why: "focus" | "click" | "input") {
+  if (Date.now() < quietUntil || (dismissed === field && why !== "click")) return;
+  if (why === "click") dismissed = null;
   const kind = kindOf(field);
   if (!kind) return;
   const s = await settings();
   const m = await matches(kind === "otp");
-  if (document.activeElement !== field || m.error) return;
+  if (document.activeElement !== field || m.error || Date.now() < quietUntil) return;
   const logins = m.logins ?? [], codes = m.codes ?? [];
 
   if (kind === "otp") {
-    if (!s.suggestCodes || (!codes.length && !m.locked && why === "focus")) return;
-    return openBox(field, "2FA code", (add, msg) => {
+    if (!s.suggestCodes || field.value.trim() || (!codes.length && !m.locked)) return closeBox();
+    return openBox(field, "2FA code", (add) => {
       if (m.locked) return add(lockedHtml, unlock);
-      if (!codes.length) return msg("No 2FA code saved for this site.");
-      for (const c of codes) add(codeHtml(c), async () => { const r = await send<{ code?: string }>({ t: "code", id: c.id }); if (r.code) fillCode(r.code, field); });
+      for (const c of codes) add(codeHtml(c), async () => { const r = await send<{ code?: string }>({ t: "code", id: c.id }); quiet(); if (r.code) fillCode(r.code, field); });
     });
   }
 
   if (kind === "newPassword") {
-    if (!s.suggestPasswords && !logins.length) return;
+    if (field.value || !s.suggestPasswords) return closeBox();
     const pw = generatePassword({ length: 20 });
     return openBox(field, "new password", (add) => {
-      if (s.suggestPasswords) add(`<div class="txt"><b>Use a strong password</b><span class="pw">${esc(pw)}</span></div>`, () => fillNewPassword(pw, field));
-      if (!m.locked) for (const l of logins) add(loginHtml(l), () => void fillFrom(l.id, field));
+      add(`<div class="txt"><b>Use a strong password</b><span class="pw">${esc(pw)}</span></div>`, () => { quiet(); fillNewPassword(pw, field); });
     });
   }
 
-  // username / password: a waiting passkey sign-in first, then the saved logins
-  const keys = conditional && kind === "username" ? (m.passkeys ?? []) : [];
-  if (!logins.length && !keys.length && !(m.locked && (s.suggest || conditional))) return;
+  // username / password: a waiting passkey sign-in first, then the saved logins that fit
+  const keys = conditional && kind === "username" && !field.value.trim() ? (m.passkeys ?? []) : [];
+  const fit = s.suggest && !m.locked ? fitting(field, kind, logins) : [];
+  const lockedHint = m.locked && (s.suggest || conditional) && !field.value && why !== "input";
+  if (!fit.length && !keys.length && !lockedHint) return closeBox();
   openBox(field, "sign in", (add) => {
     if (m.locked) return add(lockedHtml, unlock);
-    for (const p of keys) add(passkeyHtml(p), () => void usePasskey(p.id));
-    for (const l of logins) add(loginHtml(l), () => void fillFrom(l.id, field));
+    for (const p of keys) add(passkeyHtml(p), () => { quiet(); void usePasskey(p.id); });
+    for (const l of fit) add(loginHtml(l), () => void fillFrom(l.id, field));
   });
 }
 
 async function fillFrom(id: string, field?: HTMLInputElement) {
+  quiet();
   const r = await send<{ username?: string; password?: string; error?: string }>({ t: "fill", id });
   if (r.error) return;
+  quiet();
   fillLogin(r.username ?? "", r.password ?? "", field);
 }
 
-document.addEventListener("focusin", (e) => { const t = e.target; if (t instanceof HTMLInputElement && t !== boxFor) void offerFor(t, "focus"); }, true);
-document.addEventListener("click", (e) => { const t = e.target; if (t instanceof HTMLInputElement && t !== boxFor && kindOf(t)) void offerFor(t, "click"); }, true);
+document.addEventListener("focusin", (e) => { const t = e.target; if (t instanceof HTMLInputElement && t !== boxFor) { if (dismissed !== t) dismissed = null; void offerFor(t, "focus"); } }, true);
+document.addEventListener("click", (e) => { const t = e.target; if (t instanceof HTMLInputElement && kindOf(t) && !(box && t === boxFor)) void offerFor(t, "click"); }, true);
+// Typing narrows the list, or closes it when nothing fits.
+let typing = 0;
+document.addEventListener("input", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || !e.isTrusted || document.activeElement !== t) return;
+  clearTimeout(typing);
+  typing = window.setTimeout(() => void offerFor(t, "input"), 120);
+}, true);
 document.addEventListener("focusout", () => setTimeout(() => { if (box && document.activeElement !== boxFor) closeBox(); }, 150), true);
 document.addEventListener("keydown", (e) => {
   if (!box || e.target !== boxFor) return;
-  if (e.key === "Escape") return closeBox();
+  if (e.key === "Escape") { dismissed = boxFor; return closeBox(); }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
     sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + items.length) % Math.max(1, items.length);
@@ -262,7 +295,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     e.stopImmediatePropagation();
     const run = items[sel]!.run;
-    closeBox();
+    quiet();
     run();
   }
 }, true);
@@ -325,6 +358,7 @@ function offerSave(o: Offer) {
 chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>) => {
   if (m.t === "offerSave" && window === top) offerSave(m as unknown as Offer);
   if (m.t === "doFill") {
+    quiet();
     const focused = document.activeElement instanceof HTMLInputElement ? document.activeElement : undefined;
     if (focused && kindOf(focused) === "otp" && m.code) fillCode(m.code, focused);
     else fillLogin(m.username ?? "", m.password ?? "", focused && kindOf(focused) ? focused : undefined);
@@ -333,6 +367,7 @@ chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>)
 });
 
 async function fillBest() {
+  quiet();
   const focused = document.activeElement instanceof HTMLInputElement ? document.activeElement : undefined;
   const m = await matches(true);
   if (focused && kindOf(focused) === "otp") {

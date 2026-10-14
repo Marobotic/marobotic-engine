@@ -21,6 +21,7 @@ export async function fetchVault(_session: string): Promise<{ rev: number; file:
     const v = Vault.create("test@marobotic.dev", "test-pass", { kdf: { v: 1, alg: "argon2id13", ops: 1, memBytes: 8 * 1024 * 1024 } }).vault;
     const code = v.add({ type: "totp", otp: normalizeEntry({ issuer: "localhost", account: "tester", secret: "JBSWY3DPEHPK3PXP" }) });
     v.add({ type: "login", name: "Local test", urls: ["http://localhost:8643"], username: "tester", password: "hunter2-local", notes: "", totpId: code.id });
+    v.add({ type: "login", name: "Local test (2)", urls: ["http://localhost:8643"], username: "maro@marobotic.dev", password: "maro-pw", notes: "" });
     v.add({ type: "login", name: "GitHub", urls: ["https://github.com"], username: "mi", password: "gh-pw", notes: "" });
     file = v.toFile();
   }

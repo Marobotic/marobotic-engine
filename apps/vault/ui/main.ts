@@ -312,6 +312,10 @@ function settingsModal() {
           </div>
           ${platform.isDesktopApp ? `
           <div class="set">
+            <div><b>Only Vault fills passwords</b><span>Brave, Chrome and Edge stop suggesting and filling the passwords they saved themselves, and their address and card autofill. Windows asks for administrator approval once. Nothing is deleted; the browser says it is "managed" while this is on. Restart the browser after changing it. Move its old passwords in first: export a .csv from the browser, then Import here.<br><span id="lockdownState"></span></span></div>
+            <span class="m-switch" id="lockdown" role="switch" tabindex="0"></span>
+          </div>
+          <div class="set">
             <div><b>Open 2FA setup links</b><span>When a site offers "Add to authenticator app" (an otpauth:// link), it opens in Vault.</span></div>
             <span class="m-switch ${linksOn ? "on" : ""}" id="links" role="switch" tabindex="0"></span>
           </div>` : ""}
@@ -331,6 +335,26 @@ function settingsModal() {
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
   void platform.vaultPath().then((p) => ($("#path", back).textContent = p));
+  const ld = $("#lockdown", back);
+  if (ld) {
+    // The switch shows what the registry says, not what was last clicked.
+    const showLd = async () => {
+      const st = await platform.browserLockdownState().catch(() => [] as [string, boolean][]);
+      const on = st.length > 0 && st.every(([, off]) => off);
+      ld.classList.toggle("on", on);
+      $("#lockdownState", back).textContent = st.length ? st.map(([n, off]) => `${n}: ${off ? "Vault only" : "its own password manager is on"}`).join(" · ") : "No Brave, Chrome or Edge on this PC.";
+      return on;
+    };
+    void showLd();
+    ld.onclick = async () => {
+      const turnOn = !ld.classList.contains("on");
+      try {
+        const changed = await platform.setBrowserLockdown(turnOn);
+        toast(changed.length ? `${changed.join(", ")}: ${turnOn ? "only Vault fills passwords" : "own password manager back on"} - restart the browser` : "No Brave, Chrome or Edge found");
+      } catch (e) { toast(String(e)); }
+      await showLd();
+    };
+  }
   const sw = $("#links", back);
   if (sw) {
     sw.onclick = async () => {

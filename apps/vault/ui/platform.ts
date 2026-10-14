@@ -58,6 +58,18 @@ export async function takeLaunchLink(): Promise<string | null> {
   return null;
 }
 
+/** Windows: the browsers' own password managers (and address/card autofill) off or back on. Asks
+ *  for administrator approval once (browser policies are machine-wide). */
+export async function setBrowserLockdown(on: boolean): Promise<string[]> {
+  if (!isDesktopApp) return [];
+  return tauri!<string[]>("set_browser_lockdown", { on });
+}
+/** Each installed browser, and whether its own password manager is off. */
+export async function browserLockdownState(): Promise<[string, boolean][]> {
+  if (!isDesktopApp) return [];
+  return tauri!<[string, boolean][]>("browser_lockdown_state");
+}
+
 /** Bring the window to the front (an otpauth link). */
 export async function showWindow(): Promise<void> {
   if (isDesktopApp) await tauri!<void>("show_window");

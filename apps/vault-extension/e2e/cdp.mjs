@@ -38,7 +38,7 @@ async function session(match) {
   return { call, close: () => ws.close(), t };
 }
 
-const KEYS = { Enter: [13, "\r"], ArrowDown: [40, ""], ArrowUp: [38, ""], Tab: [9, ""], Escape: [27, ""] };
+const KEYS = { Backspace: [8, ""], Enter: [13, "\r"], ArrowDown: [40, ""], ArrowUp: [38, ""], Tab: [9, ""], Escape: [27, ""] };
 
 switch (cmd) {
   case "serve":
