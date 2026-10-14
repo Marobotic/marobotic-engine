@@ -17,6 +17,16 @@ Release signing reuses the shared marobotic key (`C:\Users\Maro\.marobotic\keys\
 alias `marobotic`) via `src-tauri/gen/android/keystore.properties`. Install on the A07 with
 `mdeploy android install <apk> --serial 192.168.3.173:5555`.
 
+### What the Android app adds (in `src-tauri/gen/android`, kept in git)
+- **Autofill service** (`VaultAutofillService.kt`): Vault > Settings > *Choose Vault* opens Android's
+  autofill picker. Under sign-in fields in apps and browsers it offers the matching logins, **Use a strong
+  password** in sign-up fields, and the current **2FA code** in code fields, and Android's *Save to Vault?*
+  keeps new logins. It only works from memory while Vault is unlocked (`AutofillStore.kt`, filled by
+  `ui/platform.ts` > `setAutofill`); when locked, the entry *Vault is locked* opens Vault to unlock
+  and then fills. Chrome on Android also needs *Settings > Autofill services > Autofill using another service*.
+- **Camera**: Add > *Scan with the camera* (getUserMedia + jsQR; the CAMERA permission is asked on first use).
+- **otpauth:// links** open Vault (intent filter on `MainActivity`), which asks before adding the code.
+
 ## iOS (CI only)
 iOS can't be built on Windows. `.github/workflows/vault-ios.yml` builds an unsigned `.ipa` on a macOS
 runner; install it on the iPhone with `mdeploy ios update <owner>/marobotic-engine --source actions`

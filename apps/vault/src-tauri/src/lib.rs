@@ -5,7 +5,10 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+#[cfg(desktop)]
+mod bridge;
 
 fn vault_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -65,9 +68,111 @@ fn xl_send(code: String, host: String) -> bool {
     status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200")
 }
 
+/// Windows: every QR code on every monitor. Vault's own window steps aside for the capture, so a
+/// QR code behind it is read too.
+#[cfg(windows)]
+#[tauri::command]
+async fn scan_screen(window: tauri::WebviewWindow) -> Result<Vec<String>, String> {
+    let _ = window.hide();
+    let shots = tauri::async_runtime::spawn_blocking(|| {
+        std::thread::sleep(Duration::from_millis(350)); // let the window finish disappearing
+        xcap::Monitor::all().map(|ms| ms.iter().filter_map(|m| m.capture_image().ok()).collect::<Vec<_>>())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    let shots = shots.map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut found = Vec::new();
+        for img in shots {
+            let (w, h) = (img.width() as usize, img.height() as usize);
+            let px = img.as_raw();
+            let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| {
+                let i = (y * w + x) * 4;
+                ((px[i] as u32 * 77 + px[i + 1] as u32 * 150 + px[i + 2] as u32 * 29) >> 8) as u8
+            });
+            for grid in prepared.detect_grids() {
+                if let Ok((_, text)) = grid.decode() {
+                    if !found.contains(&text) {
+                        found.push(text);
+                    }
+                }
+            }
+        }
+        found
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn scan_screen() -> Vec<String> {
+    Vec::new()
+}
+
+/// Windows: otpauth:// links (a site's "add to authenticator app" button) open Vault. Per user, no admin.
+#[cfg(windows)]
+#[tauri::command]
+fn set_link_handler(on: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let reg = |args: &[&str]| {
+        std::process::Command::new("reg").args(args).creation_flags(0x0800_0000).output().map_err(|e| e.to_string())
+    };
+    let key = r"HKCU\Software\Classes\otpauth";
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?.display().to_string();
+    if on {
+        reg(&["add", key, "/ve", "/d", "URL:otpauth", "/f"])?;
+        reg(&["add", key, "/v", "URL Protocol", "/d", "", "/f"])?;
+        reg(&["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &format!("{exe},0"), "/f"])?;
+        reg(&["add", &format!(r"{key}\shell\open\command"), "/ve", "/d", &format!("\"{exe}\" \"%1\""), "/f"])?;
+    } else {
+        // Only remove the handler when it is Vault's, never another authenticator's.
+        let cur = reg(&["query", &format!(r"{key}\shell\open\command"), "/ve"])?;
+        if String::from_utf8_lossy(&cur.stdout).contains(&exe) {
+            reg(&["delete", key, "/f"])?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn set_link_handler(_on: bool) {}
+
+/// The otpauth:// link Vault was started with (Windows), handed to the window once.
+struct LaunchLink(std::sync::Mutex<Option<String>>);
+
+fn link_in(args: &[String]) -> Option<String> {
+    args.iter().find(|a| a.to_ascii_lowercase().starts_with("otpauth")).cloned()
+}
+
+#[tauri::command]
+fn take_launch_link(state: tauri::State<LaunchLink>) -> Option<String> {
+    state.0.lock().ok()?.take()
+}
+
+/// The window's answer to one browser-extension request (see bridge.rs).
+#[tauri::command]
+fn bridge_reply(app: tauri::AppHandle, id: u64, json: String) {
+    #[cfg(desktop)]
+    bridge::reply(&app, id, json);
+    #[cfg(not(desktop))]
+    let _ = (app, id, json);
+}
+
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    #[cfg(desktop)]
+    show_main(&app);
+    #[cfg(not(desktop))]
+    let _ = app;
+}
+
 /// Bring the window back from the tray (or from behind other windows).
 #[cfg(desktop)]
-fn show_main(app: &tauri::AppHandle) {
+pub(crate) fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -104,12 +209,22 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
-    // Starting Vault again (Start menu, shortcut) shows the one already in the tray.
+    let builder = tauri::Builder::default().manage(LaunchLink(std::sync::Mutex::new(link_in(&std::env::args().collect::<Vec<_>>()))));
+    // Starting Vault again (Start menu, shortcut, an otpauth:// link) shows the one already in the tray.
     #[cfg(desktop)]
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
-        .setup(|app| Ok(tray(app)?))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            show_main(app);
+            if let Some(link) = link_in(&args) {
+                let _ = app.emit_to("main", "link", link);
+            }
+        }))
+        .manage(bridge::Pending::default())
+        .setup(|app| {
+            tray(app)?;
+            bridge::start(app.handle().clone());
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -117,7 +232,9 @@ pub fn run() {
             }
         });
     builder
-        .invoke_handler(tauri::generate_handler![vault_path, load_vault, save_vault, xl_send])
+        .invoke_handler(tauri::generate_handler![
+            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window, bridge_reply
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");
 }

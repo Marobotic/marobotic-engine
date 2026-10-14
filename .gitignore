@@ -5,4 +5,6 @@ dist/
 *.vault
 *.secret.json
 apps/*/src-tauri/target/
-apps/*/src-tauri/gen/
+apps/*/src-tauri/gen/*
+# Vault's Android project carries its own code (autofill, links, camera): keep it, minus build output
+!apps/vault/src-tauri/gen/android/

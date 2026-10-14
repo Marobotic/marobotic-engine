@@ -13,6 +13,9 @@ apps/
   vault/       Vault: encrypted 2FA + passwords + passkeys
     src/vault.ts        items sealed one by one, recovery kit, two-device merge
     src/xivlauncher.ts  sends the FFXIV code to XIVLauncher (port 4646) when it asks
+    src/domains.ts      which logins/codes belong to a page or app (the phishing guard)
+    ui/bridge.ts        the browser extension's requests, answered by the open vault
+  vault-extension/  Vault for Chrome/Brave/Edge: fill logins + 2FA codes, save new logins, strong passwords
   letterbox/   Letterbox: the mail client on the Zoho mailbox, live at marobotic.dev/letterbox
 ```
 

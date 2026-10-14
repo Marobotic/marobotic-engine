@@ -1,12 +1,14 @@
 // Vault's window: sign in with the marobotic account, and the 2FA codes. Everything secret is opened
 // here, on the device; the copy on this PC and the one on the server are both sealed.
 import { init, KDF_V1 } from "@marobotic/crypto";
-import { totp, normalizeEntry, type OtpEntry } from "@marobotic/otp";
+import { totp, normalizeEntry, base32Decode, type OtpEntry, type Algorithm } from "@marobotic/otp";
 import { importText, importPasswordCsv, type ImportResult } from "@marobotic/importers";
 import { Vault, type VaultFile, type Item, type TotpItem, type LoginItem } from "../src/vault.ts";
 import { ffxivEntries, sendWhenAsked } from "../src/xivlauncher.ts";
 import { generatePassword, hostOf, matchTotp } from "../src/passwords.ts";
 import { siteOf } from "../src/icons.ts";
+import { MULTI, SAME_SIGN_IN, loginsFor, siteKey } from "../src/domains.ts";
+import * as bridge from "./bridge.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -29,6 +31,8 @@ let lockAfterMin = Number(localStorage.getItem("vault.lockAfterMin")) || 0;   //
 let autoXlId = localStorage.getItem("vault.autoXlId") || "";                 // the one FFXIV account auto-sent
 let xlRun: AbortController | null = null;
 let filter: "totp" | "login" = "totp";
+let pendingLink: string | null = null;                                         // an otpauth:// link waiting for the vault to open
+let linksOn = localStorage.getItem("vault.links") !== "off";                  // Windows: Vault opens otpauth:// links
 const copiedUntil = new Map<string, number>();                                // row id -> when "Copied" goes back to the code
 
 function h(html: string): DocumentFragment {
@@ -51,6 +55,7 @@ async function save() {
   if (!vault) return;
   file = vault.toFile();
   await platform.saveVault(JSON.stringify(file));
+  refreshAutofill();
   void sync();
 }
 
@@ -86,6 +91,7 @@ function signInScreen(message = "") {
   vault = null;
   session = null;
   stopAutoXl();
+  platform.setAutofill(null);
   const last = file?.email || localStorage.getItem("vault.email") || "";
   app.replaceChildren(h(`
     <form class="gate">
@@ -233,17 +239,13 @@ function homeScreen() {
       <button class="m-btn subtle compact" id="settings" title="Settings">&#xf013;<span class="lbl"> Settings</span></button>
     </div>
     <div class="bar">
-      <input class="m-field grow" id="q" placeholder="Search" value="${esc(query)}">
-      <button class="m-btn ${filter === "totp" ? "primary " : ""}compact" id="newCode"> 2FA</button>
-      <button class="m-btn ${filter === "login" ? "primary " : ""}compact" id="newLogin"> Login</button>
-      <button class="m-btn compact" id="import"> Import</button>
+      <div class="m-seg filter grow" id="filter"></div>
+      <button class="m-btn primary compact" id="import" title="${filter === "totp" ? "Add or import 2FA codes" : "Add or import logins"}">&#xf019;<span class="lbl"> Import</span></button>
     </div>
-    <div class="m-seg filter" id="filter"></div>
+    <input class="m-field search" id="q" placeholder="Search" value="${esc(query)}">
     <div id="list"></div>`));
   $("#settings").onclick = () => settingsModal();
-  $("#newLogin").onclick = () => loginEditor(null);
-  $("#newCode").onclick = () => addModal("codes");
-  $("#import").onclick = () => addModal("import");
+  $("#import").onclick = () => (filter === "totp" ? addCodeModal() : importModal());
   const seg = $("#filter");
   for (const [v, label] of [["totp", "2FA codes"], ["login", "Passwords"]] as const) {
     const b = document.createElement("button");
@@ -256,6 +258,15 @@ function homeScreen() {
   renderList();
   if (autoXlId) startAutoXl();
   if (session) void sync();
+  void unlocked();
+}
+
+/** Each time the vault opens: Android autofill gets its list, and a link Vault was opened with is offered. */
+async function unlocked() {
+  refreshAutofill();
+  const link = pendingLink ?? (await platform.takeLaunchLink());
+  pendingLink = null;
+  if (link) offerLink(link);
 }
 
 // ------------------------------------------------------------------ settings
@@ -279,6 +290,20 @@ function settingsModal() {
             <div><b>Recovery kit</b><span>The only way back into your vault if your account password is reset. Making a new one stops the old one working.</span></div>
             <button class="m-btn compact" id="kit">New kit</button>
           </div>
+          ${platform.isDesktopApp ? `
+          <div class="set">
+            <div><b>Browser extension</b><span id="ext"></span></div>
+            <button class="m-btn compact" id="forget">Disconnect all</button>
+          </div>
+          <div class="set">
+            <div><b>Open 2FA setup links</b><span>When a site offers "Add to authenticator app" (an otpauth:// link), it opens in Vault.</span></div>
+            <span class="m-switch ${linksOn ? "on" : ""}" id="links" role="switch" tabindex="0"></span>
+          </div>` : ""}
+          ${platform.hasAutofill ? `
+          <div class="set">
+            <div><b>Autofill in apps and browsers</b><span id="afState"></span></div>
+            <button class="m-btn compact" id="afSet">Choose Vault</button>
+          </div>` : ""}
           <div class="set">
             <div><b>Vault file on this device</b><span id="path"></span></div>
           </div>
@@ -290,6 +315,37 @@ function settingsModal() {
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
   void platform.vaultPath().then((p) => ($("#path", back).textContent = p));
+  const ext = $("#ext", back);
+  if (ext) {
+    const showExt = () => {
+      const b = bridge.pairedBrowsers();
+      ext.textContent = b.length ? `Connected: ${b.map((x) => x.browser).join(", ")}. It fills logins and 2FA codes, saves new ones, and suggests strong passwords.`
+        : "Not connected yet. Add the Vault extension to Chrome, Brave or Edge, then click Connect in it while Vault is open.";
+      $<HTMLButtonElement>("#forget", back).disabled = !b.length;
+    };
+    showExt();
+    $("#forget", back).onclick = () => { if (confirm("Disconnect every browser? Each one has to connect again before it can fill.")) { bridge.forgetBrowsers(); showExt(); } };
+    const sw = $("#links", back);
+    sw.onclick = async () => {
+      linksOn = !linksOn;
+      localStorage.setItem("vault.links", linksOn ? "on" : "off");
+      sw.classList.toggle("on", linksOn);
+      await platform.setLinkHandler(linksOn).catch(() => toast("Couldn't change the link setting"));
+    };
+  }
+  const af = $("#afState", back);
+  if (af) {
+    const showAf = () => {
+      const st = platform.autofillState();
+      af.textContent = st === "on" ? "On: Vault offers your logins, strong new passwords and 2FA codes when you sign in to apps and websites, and asks to save new logins."
+        : st === "off" ? "Off: pick Vault as the autofill service so it can fill logins and 2FA codes everywhere. In Chrome, also turn on Settings > Autofill services > Autofill using another service."
+        : "This Android version has no autofill service setting.";
+      $<HTMLButtonElement>("#afSet", back).textContent = st === "on" ? "Change" : "Choose Vault";
+    };
+    showAf();
+    $("#afSet", back).onclick = () => platform.openAutofillSettings();
+    addEventListener("focus", showAf, { once: true });
+  }
   $<HTMLSelectElement>("#lockAfter", back).onchange = (e) => {
     lockAfterMin = Number((e.target as HTMLSelectElement).value) || 0;
     localStorage.setItem("vault.lockAfterMin", String(lockAfterMin));
@@ -321,11 +377,11 @@ function renderList() {
   if (!rows.length) {
     const shown = filter === "totp" ? ts.length : ls.length;
     const msg = shown ? "Nothing matches your search." : filter === "totp" ? "No 2FA codes yet." : "No passwords yet.";
-    const hint = shown ? "" : filter === "totp" ? "Scan a QR code, paste a setup key, or import from Google Authenticator." : "Add a login, or import passwords from your browser or another app.";
+    const hint = shown ? "" : filter === "totp" ? `Scan a QR code${platform.isDesktopApp ? " on your screen" : platform.isMobile ? " with the camera" : ""}, type a setup key, or import from Google Authenticator.` : "Add a login, or import passwords from your browser or another app.";
     list.replaceChildren(h(`<div class="empty"><div>${msg}</div>${hint ? `<div class="faint">${hint}</div>` : ""}
       ${shown ? "" : filter === "totp" ? `<button class="m-btn primary" id="e2">&#xf023; Add 2FA</button>` : `<button class="m-btn primary" id="e1">&#xf084; New login</button>`}</div>`));
     $("#e1")?.addEventListener("click", () => loginEditor(null));
-    $("#e2")?.addEventListener("click", () => addModal("codes"));
+    $("#e2")?.addEventListener("click", () => addCodeModal());
     return;
   }
   closeMenu();
@@ -562,23 +618,181 @@ function startAutoXl() {
 function stopAutoXl() { xlRun?.abort(); xlRun = null; }
 
 // ------------------------------------------------------------------ adding codes and importing
-function addModal(tab: "codes" | "import" = "codes") {
+/** Adding one 2FA code: scan a QR code (the screen on Windows, the camera on a phone, or an image),
+ *  or type the setup key a site shows under its QR code ("GHBE AHFH ADJA …"). */
+function addCodeModal() {
+  const back = h(`
+    <div class="backdrop">
+      <form class="m-modal modal add2fa">
+        <header>Import a 2FA code <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
+        <div class="content">
+          <div class="scan">
+            ${platform.isDesktopApp ? `<button class="m-btn primary" type="button" id="screen">&#xf108; Scan the screen</button>` : ""}
+            ${platform.isMobile ? `<button class="m-btn primary" type="button" id="camera">&#xf030; Scan with the camera</button>` : ""}
+            <button class="m-btn" type="button" id="pick">&#xf03e; From an image</button>
+          </div>
+          <div class="faint hint">${platform.isDesktopApp ? "Open the site's QR code, then Scan the screen: Vault steps aside for a moment and reads every QR code on your monitors. A screenshot works too (choose it, or paste it here with Ctrl+V)." : platform.isMobile ? "Point the camera at the QR code on the other screen, or choose a screenshot of it." : "Choose a screenshot of the QR code, or paste one here."}</div>
+          <input type="file" id="files" accept="image/*" multiple hidden>
+          <div class="m-section">or type the setup key</div>
+          <label class="lab" for="key">Setup key</label>
+          <input class="m-field key" id="key" placeholder="e.g. GHBE AHFH ADJA 7KQ2 …" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <div class="keystate" id="keystate"></div>
+          <div class="row2">
+            <div><label class="lab" for="iss">Service</label><input class="m-field" id="iss" placeholder="e.g. GitHub"></div>
+            <div><label class="lab" for="acc">Account</label><input class="m-field" id="acc" placeholder="you@example.com"></div>
+          </div>
+          <details class="more"><summary>Options (only if the site says so)</summary>
+            <div class="row3">
+              <div><label class="lab">Digits</label><select class="m-field" id="digits"><option>6</option><option>8</option><option>7</option><option>5</option></select></div>
+              <div><label class="lab">Every</label><select class="m-field" id="period"><option value="30">30 s</option><option value="60">60 s</option><option value="15">15 s</option></select></div>
+              <div><label class="lab">Algorithm</label><select class="m-field" id="algo"><option>SHA1</option><option>SHA256</option><option>SHA512</option></select></div>
+            </div>
+          </details>
+          <div class="m-section">or paste a link</div>
+          <input class="m-field" id="link" placeholder="otpauth://totp/… or otpauth-migration://…" autocomplete="off" spellcheck="false">
+          <div class="m-section">from another app</div>
+          <div class="faint hint">Google Authenticator: Transfer accounts, then scan or choose its QR codes above (all accounts at once).</div>
+          <button class="m-btn" type="button" id="more">&#xf084; Passwords from a .csv, or many links at once</button>
+          <div class="result" id="result"></div>
+        </div>
+        <footer><span class="grow"></span><button class="m-btn" type="button" data-close>Close</button><button class="m-btn primary" type="submit">Add</button></footer>
+      </form>
+    </div>`).firstElementChild as HTMLElement;
+  document.body.append(back);
+  const onPaste = async (e: ClipboardEvent) => {
+    const img = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith("image/"));
+    if (!img) return;
+    e.preventDefault();
+    const t = await readQr(img);
+    t ? await fromTexts([t]) : report(["The pasted image has no readable QR code."]);
+  };
+  const close = () => { back.remove(); document.removeEventListener("paste", onPaste); renderList(); };
+  back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
+  back.onclick = (e) => { if (e.target === back) close(); };
+  const report = (lines: string[]) => ($("#result", back).textContent = lines.join("\n"));
+  const fromTexts = async (texts: string[], unreadable: string[] = []) => {
+    const r = await addCodes(importText(texts.join("\n")));
+    report([r.added ? `Added ${r.names.join(", ")}.` : texts.length ? "Nothing new added." : "", r.already ? `${r.already} already in Vault.` : "",
+      ...r.skipped.map((s) => `Skipped - ${s}`), ...unreadable].filter(Boolean));
+    if (r.added && !r.skipped.length && !unreadable.length) { toast(`Added ${r.names.join(", ")}`); close(); }
+  };
+  document.addEventListener("paste", onPaste);
+
+  $("#screen", back)?.addEventListener("click", async () => {
+    report(["Looking at your screen…"]);
+    try {
+      const texts = await platform.scanScreen();
+      if (!texts.length) return report(["No QR code found on screen. Make sure it's fully visible (not covered or scrolled away) and try again."]);
+      await fromTexts(texts);
+    } catch (e) { report([`Couldn't read the screen: ${String((e as Error)?.message ?? e)}`]); }
+  });
+  $("#camera", back)?.addEventListener("click", () => cameraScan((text) => void fromTexts([text])));
+  $("#more", back).onclick = () => { close(); importModal(); };
+  const files = $<HTMLInputElement>("#files", back);
+  $("#pick", back).onclick = () => files.click();
+  files.onchange = async () => {
+    const texts: string[] = [], unreadable: string[] = [];
+    for (const f of files.files ?? []) { const t = await readQr(f); t ? texts.push(t) : unreadable.push(`${f.name}: no QR code found`); }
+    files.value = "";
+    await fromTexts(texts, unreadable);
+  };
+
+  const key = $<HTMLInputElement>("#key", back);
+  key.oninput = () => {
+    const k = checkKey(key.value), st = $("#keystate", back);
+    st.textContent = k.message;
+    st.className = `keystate ${k.ok ? "ok" : k.message ? "bad" : ""}`;
+  };
+
+  $<HTMLFormElement>("form", back).onsubmit = async (ev) => {
+    ev.preventDefault();
+    const link = $<HTMLInputElement>("#link", back).value.trim();
+    if (link) { await fromTexts([link]); $<HTMLInputElement>("#link", back).value = ""; return; }
+    const k = checkKey(key.value);
+    if (!key.value.trim()) return report(["Scan a QR code, type the setup key, or paste a link."]);
+    if (!k.ok) return report([k.message]);
+    const iss = $<HTMLInputElement>("#iss", back).value.trim(), acc = $<HTMLInputElement>("#acc", back).value.trim();
+    if (!iss && !acc) return report(["Give it a service or an account name, so you can tell it apart."]);
+    try {
+      const e = normalizeEntry({
+        issuer: iss, account: acc, secret: k.clean,
+        digits: Number($<HTMLSelectElement>("#digits", back).value), period: Number($<HTMLSelectElement>("#period", back).value),
+        algorithm: $<HTMLSelectElement>("#algo", back).value as Algorithm,
+      });
+      const r = await addCodes({ entries: [e], skipped: [] });
+      if (r.added) { toast(`Added ${r.names[0]}`); close(); } else report(["That code is already in Vault."]);
+    } catch (e) { report([(e as Error).message]); }
+  };
+  if (!platform.isMobile) key.focus();
+}
+
+/** A setup key as people type it: any case, spaces and dashes anywhere. Look-alike digits get a hint. */
+function checkKey(text: string): { ok: boolean; clean: string; message: string } {
+  const clean = text.toUpperCase().replace(/[\s=-]/g, "");
+  if (!clean) return { ok: false, clean, message: "" };
+  const bad = [...new Set(clean.replace(/[A-Z2-7]/g, ""))];
+  if (bad.length) {
+    const tips: Record<string, string> = { "0": "O", "1": "I", "8": "B" };
+    const tip = bad.filter((c) => tips[c]).map((c) => `${tips[c]} for ${c}`);
+    return { ok: false, clean, message: `Setup keys only use the letters A-Z and the digits 2-7, so ${bad.map((c) => `"${c}"`).join(" ")} can't be in one${tip.length ? ` (did you mean ${tip.join(", ")}?)` : "."}` };
+  }
+  if (base32Decode(clean).length < 10) return { ok: false, clean, message: `${clean.length} characters so far - setup keys are usually 16 or 32.` };
+  return { ok: true, clean, message: `${clean.length} characters ✓` };
+}
+
+/** Phones: the camera fills the screen until it sees a QR code. */
+async function cameraScan(found: (text: string) => void) {
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+  } catch {
+    return toast("Vault can't use the camera - allow it in Android's settings for Vault");
+  }
+  const view = h(`<div class="camera"><video playsinline muted></video><div class="frame"></div>
+    <div class="cam-bar"><span>Point at the QR code</span><button class="m-btn" type="button">Cancel</button></div></div>`).firstElementChild as HTMLElement;
+  document.body.append(view);
+  const video = view.querySelector("video")!;
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  const c = document.createElement("canvas");
+  const g = c.getContext("2d", { willReadFrequently: true })!;
+  let done = false;
+  const stop = () => { done = true; stream.getTracks().forEach((t) => t.stop()); view.remove(); };
+  view.querySelector("button")!.onclick = stop;
+  const look = () => {
+    if (done) return;
+    if (video.videoWidth) {
+      const scale = Math.min(1, 900 / Math.max(video.videoWidth, video.videoHeight));
+      c.width = Math.round(video.videoWidth * scale);
+      c.height = Math.round(video.videoHeight * scale);
+      g.drawImage(video, 0, 0, c.width, c.height);
+      const hit = jsQR(g.getImageData(0, 0, c.width, c.height).data, c.width, c.height, { inversionAttempts: "attemptBoth" });
+      if (hit?.data && /^otpauth(-migration)?:/i.test(hit.data)) { navigator.vibrate?.(40); stop(); return found(hit.data); }
+    }
+    setTimeout(look, 160);
+  };
+  look();
+}
+
+/** Importing from other apps: Google Authenticator's transfer QR codes, links, and password CSVs. */
+function importModal() {
   const back = h(`
     <div class="backdrop">
       <form class="m-modal modal">
-        <header>${tab === "import" ? "Import" : "Add 2FA codes"} <button class="m-btn subtle compact" type="button" data-close></button></header>
+        <header>Import <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
         <div class="content">
-          <div class="drop" id="pick"> Choose QR images or screenshots<br><span class="faint">Google Authenticator's "Transfer accounts" QR codes work too: one image per code</span></div>
-          <input type="file" id="files" accept="image/*" multiple hidden>
-          <div class="drop" id="pickCsv"> Import passwords from a .csv<br><span class="faint">Chrome, Brave, Edge, Firefox, Bitwarden, Apple Passwords, 1Password, LastPass — their 2FA keys come too</span></div>
+          <div class="scan"><button class="m-btn primary" type="button" id="newLogin">&#xf067; New login</button><button class="m-btn" type="button" id="new2fa">&#xf023; New 2FA code</button></div>
+          <div class="drop" id="pickCsv">&#xf084; Passwords from a .csv<br><span class="faint">Chrome, Brave, Edge, Firefox, Bitwarden, Apple Passwords, 1Password, LastPass - their 2FA keys come too</span></div>
           <input type="file" id="csv" accept=".csv,text/csv" hidden>
-          <label class="lab">or paste 2FA links (otpauth:// or otpauth-migration://)</label>
+          <div class="drop" id="pick">&#xf029; 2FA codes from QR images<br><span class="faint">Google Authenticator's "Transfer accounts" QR codes: one screenshot per code</span></div>
+          <input type="file" id="files" accept="image/*" multiple hidden>
+          ${platform.isDesktopApp ? `<button class="m-btn" type="button" id="screen">&#xf108; Scan the screen for transfer QR codes</button>` : ""}
+          ${platform.isMobile ? `<button class="m-btn" type="button" id="camera">&#xf030; Scan a transfer QR code with the camera</button>` : ""}
+          <label class="lab">or paste 2FA links (otpauth:// or otpauth-migration://), one per line</label>
           <textarea id="text" placeholder="otpauth://totp/GitHub:you?secret=...&#10;otpauth-migration://offline?data=..."></textarea>
-          <div class="row2"><input class="m-field" id="iss" placeholder="Service (optional)"><input class="m-field" id="acc" placeholder="Account (optional)"></div>
-          <input class="m-field" id="key" placeholder="or a setup key (letters A-Z and 2-7)">
           <div class="result" id="result"></div>
         </div>
-        <footer><button class="m-btn" type="button" data-close>Close</button><button class="m-btn primary" type="submit">Add</button></footer>
+        <footer><span class="grow"></span><button class="m-btn" type="button" data-close>Close</button><button class="m-btn primary" type="submit">Import links</button></footer>
       </form>
     </div>`).firstElementChild as HTMLElement;
   document.body.append(back);
@@ -586,16 +800,27 @@ function addModal(tab: "codes" | "import" = "codes") {
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
   const report = (lines: string[]) => ($("#result", back).textContent = lines.join("\n"));
+  const fromTexts = async (texts: string[], unreadable: string[] = []) => {
+    const r = await addCodes(importText(texts.join("\n")));
+    report([`Added ${r.added}${r.already ? `, ${r.already} already here` : ""}.`, ...r.skipped.map((s) => `Skipped - ${s}`), ...unreadable]);
+  };
 
+  $("#newLogin", back).onclick = () => { close(); loginEditor(null); };
+  $("#new2fa", back).onclick = () => { close(); addCodeModal(); };
   const files = $<HTMLInputElement>("#files", back);
   $("#pick", back).onclick = () => files.click();
   files.onchange = async () => {
     const texts: string[] = [], unreadable: string[] = [];
-    for (const f of files.files ?? []) { const t = await readQr(f); t ? texts.push(t) : unreadable.push(f.name); }
-    const r = await addCodes(importText(texts.join("\n")));
-    report([`Added ${r.added}${r.already ? `, ${r.already} already here` : ""}.`, ...r.skipped.map((s) => `Skipped - ${s}`), ...unreadable.map((n) => `Skipped - ${n}: no QR code found`)]);
+    for (const f of files.files ?? []) { const t = await readQr(f); t ? texts.push(t) : unreadable.push(`Skipped - ${f.name}: no QR code found`); }
     files.value = "";
+    await fromTexts(texts, unreadable);
   };
+  $("#screen", back)?.addEventListener("click", async () => {
+    report(["Looking at your screen…"]);
+    const texts = await platform.scanScreen().catch(() => [] as string[]);
+    texts.length ? await fromTexts(texts) : report(["No QR code found on screen."]);
+  });
+  $("#camera", back)?.addEventListener("click", () => cameraScan((t) => void fromTexts([t])));
 
   const csv = $<HTMLInputElement>("#csv", back);
   $("#pickCsv", back).onclick = () => csv.click();
@@ -608,33 +833,36 @@ function addModal(tab: "codes" | "import" = "codes") {
   $<HTMLFormElement>("form", back).onsubmit = async (ev) => {
     ev.preventDefault();
     const text = $<HTMLTextAreaElement>("#text", back).value;
-    const key = $<HTMLInputElement>("#key", back).value.trim();
-    const results: ImportResult = { entries: [], skipped: [] };
-    if (text.trim()) { const r = importText(text); results.entries.push(...r.entries); results.skipped.push(...r.skipped); }
-    if (key) {
-      try { results.entries.push(normalizeEntry({ issuer: $<HTMLInputElement>("#iss", back).value, account: $<HTMLInputElement>("#acc", back).value, secret: key })); }
-      catch (e) { results.skipped.push(`setup key: ${(e as Error).message}`); }
-    }
-    if (!text.trim() && !key) return void report(["Paste a link, type a setup key, or choose a file above."]);
-    const r = await addCodes(results);
-    report([`Added ${r.added}${r.already ? `, ${r.already} already here` : ""}.`, ...r.skipped.map((s) => `Skipped - ${s}`)]);
+    if (!text.trim()) return void report(["Paste links above, or choose a file."]);
+    await fromTexts([text]);
     $<HTMLTextAreaElement>("#text", back).value = "";
-    $<HTMLInputElement>("#key", back).value = "";
   };
+}
+
+/** An otpauth:// link Vault was opened with (a site's "add to authenticator app" link). */
+function offerLink(link: string) {
+  if (!vault) { pendingLink = link; return; }
+  const r = importText(link);
+  if (!r.entries.length) return toast(`That link isn't a 2FA code${r.skipped[0] ? ` (${r.skipped[0]})` : ""}`);
+  const names = r.entries.map((e) => [e.issuer, e.account].filter(Boolean).join(" · ")).join(", ");
+  if (!confirm(`Add this 2FA code to Vault?\n\n${names}`)) return;
+  void addCodes(r).then((x) => { toast(x.added ? `Added ${x.names.join(", ")}` : "Already in Vault"); filter = "totp"; homeScreen(); });
 }
 
 async function addCodes(r: ImportResult) {
   const have = new Set(otps().map((i) => `${i.data.otp.secret}|${i.data.otp.issuer}|${i.data.otp.account}`));
   let added = 0, already = 0;
+  const names: string[] = [];
   for (const e of r.entries) {
     const k = `${e.secret}|${e.issuer}|${e.account}`;
     if (have.has(k)) { already++; continue; }
     vault!.add({ type: "totp", otp: e });
     have.add(k);
+    names.push([e.issuer, e.account].filter(Boolean).join(" · ") || "a code");
     added++;
   }
   if (added) await save();
-  return { added, already, skipped: r.skipped };
+  return { added, already, skipped: r.skipped, names };
 }
 
 /** Import logins from a password-manager CSV; each login's 2FA key becomes a linked code. */
@@ -667,7 +895,94 @@ async function readQr(f: File): Promise<string | null> {
   return jsQR(img.data, img.width, img.height)?.data ?? null;
 }
 
+// ------------------------------------------------------------------ Android autofill
+const word = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+const otpOf = (o: OtpEntry) => ({ secret: o.secret, digits: o.digits, period: o.period, algorithm: o.algorithm });
+
+/** What Android's autofill service may offer, handed over while the vault is open (memory only).
+ *  `rules` carries the same site-matching tables the browser extension uses. */
+function refreshAutofill() {
+  if (!platform.hasAutofill || !vault) return;
+  const ls = logins(), cs = otps();
+  platform.setAutofill({
+    rules: { multi: [...MULTI], groups: SAME_SIGN_IN },
+    logins: ls.map((l) => {
+      const otp = codeFor(l.data);
+      const hosts = l.data.urls.map(hostOf).filter((x) => x && !x.includes(" "));
+      return {
+        id: l.id, name: l.data.name, username: l.data.username, password: l.data.password, hosts,
+        words: [...new Set([word(l.data.name), ...hosts.map((x) => word(siteKey(x).split(".")[0] ?? ""))].filter((w) => w.length > 2))],
+        ...(otp ? { otp: otpOf(otp) } : {}),
+      };
+    }),
+    codes: cs.map((c) => ({ id: c.id, issuer: nameOf(c), account: c.data.otp.account, words: [word(c.data.otp.issuer), word(nameOf(c))].filter((w) => w.length > 2), otp: otpOf(c.data.otp) })),
+  });
+}
+
+/** Logins Android asked to save ("Save to Vault?") while signing in somewhere: kept when the vault is open. */
+async function takeAndroidSaves() {
+  if (!vault) return;
+  const saves = platform.takeSaves();
+  for (const s of saves) {
+    if (!s.password) continue;
+    const site = s.url ? loginsFor(s.url, logins()) : logins().filter((l) => s.app && l.data.urls.includes(`androidapp://${s.app}`));
+    const same = s.username ? site.find((l) => l.data.username.toLowerCase() === s.username.toLowerCase()) : site.length === 1 ? site[0] : undefined;
+    if (same) {
+      if (same.data.password !== s.password) { vault.update(same.id, { ...same.data, password: s.password }); toast(`Password updated · ${same.data.name}`); }
+      continue;
+    }
+    const host = s.url ? hostOf(s.url) : "";
+    const name = host ? (siteKey(host).split(".")[0] ?? host).replace(/^./, (c) => c.toUpperCase()) : (s.app.split(".").filter((p) => !/^(com|org|net|android|app)$/.test(p)).pop() ?? s.app).replace(/^./, (c) => c.toUpperCase());
+    vault.add({ type: "login", name, urls: host ? [`https://${host}`] : [`androidapp://${s.app}`], username: s.username, password: s.password, notes: "" });
+    toast(`Login saved · ${name}`);
+  }
+  if (saves.length) { await save(); renderList(); }
+}
+
+// ------------------------------------------------------------------ browser extension (Windows)
+function approvePair(code: string, browser: string): Promise<boolean> {
+  void platform.showWindow();
+  return new Promise((done) => {
+    const back = h(`
+      <div class="backdrop">
+        <div class="m-modal modal">
+          <header>Connect ${esc(browser)}?</header>
+          <div class="content">
+            <p class="sans">The Vault extension in <b>${esc(browser)}</b> wants to fill your logins and 2FA codes. Allow it only if it shows this same code:</p>
+            <div class="kit">${esc(code)}</div>
+          </div>
+          <footer><span class="grow"></span><button class="m-btn" id="no">Don't allow</button><button class="m-btn primary" id="yes">Allow</button></footer>
+        </div>
+      </div>`).firstElementChild as HTMLElement;
+    document.body.append(back);
+    const end = (ok: boolean) => { back.remove(); done(ok); if (ok) toast(`${browser} connected`); };
+    $("#yes", back).onclick = () => end(true);
+    $("#no", back).onclick = () => end(false);
+    setTimeout(() => back.isConnected && end(false), 90_000);
+  });
+}
+
+const bridgeContext: bridge.BridgeContext = {
+  vault: () => vault,
+  save: async () => { await save(); renderList(); },
+  approvePair,
+  notify: toast,
+};
+
 // ------------------------------------------------------------------ start
+// The browser extension asks through the native side; each answer goes back with its id.
+platform.on("bridge", async (p) => {
+  const { id, body } = p as { id: number; body: string };
+  let res: unknown;
+  try { res = await bridge.handle(bridgeContext, JSON.parse(body) as Record<string, unknown>); } catch (e) { res = { error: String((e as Error)?.message ?? e) }; }
+  await platform.bridgeReply(id, res);
+});
+// An otpauth:// link opened while Vault runs (Windows: a second start; Android: MainActivity).
+platform.on("link", (p) => { void platform.showWindow(); offerLink(String(p)); });
+addEventListener("vault-link", async () => { const l = await platform.takeLaunchLink(); if (l) offerLink(l); });
+if (platform.hasAutofill) { setInterval(() => void takeAndroidSaves(), 2000); addEventListener("focus", () => void takeAndroidSaves()); }
+if (platform.isDesktopApp) void platform.setLinkHandler(linksOn).catch(() => {});
+
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
 setInterval(() => {
   if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`);

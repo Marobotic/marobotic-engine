@@ -1,0 +1,16 @@
+{
+  "name": "@marobotic/vault-extension",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Vault for Chrome, Brave and Edge: fills logins and 2FA codes from the Vault app, saves new logins, suggests strong passwords.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@marobotic/vault": "*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287"
+  }
+}
