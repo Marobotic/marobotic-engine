@@ -2,8 +2,8 @@
 <!-- Vault as Android's autofill service. Browsers that don't hand their page fields to autofill themselves
      get Android's compatibility mode, up to the version that does (same list as other password managers). -->
 <autofill-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="dev.marobotic.vault.MainActivity"
-    android:supportsInlineSuggestions="true">
+    android:settingsActivity="dev.marobotic.vault.MainActivity">
+    <!-- No keyboard-bar chips: Android then shows Vault's suggestions as a list drawn over the app, under the field. -->
     <compatibility-package android:name="alook.browser" android:maxLongVersionCode="10000000000" />
     <compatibility-package android:name="alook.browser.google" android:maxLongVersionCode="10000000000" />
     <compatibility-package android:name="app.vanadium.browser" android:maxLongVersionCode="10000000000" />

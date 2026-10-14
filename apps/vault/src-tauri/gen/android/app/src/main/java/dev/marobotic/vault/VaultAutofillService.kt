@@ -226,7 +226,7 @@ class VaultAutofillService : AutofillService() {
                     val exact = logins.filter { it.username.lowercase() == typedUser }
                     logins = exact.ifEmpty { logins.filter { it.username.lowercase().startsWith(typedUser) } }
                 }
-                if (loginField != null && f.focused != f.otp) for (l in logins.take(6)) {
+                if (loginField != null && f.focused != f.otp) for (l in logins.take(30)) {
                     val d = chips.dataset(l.username.ifBlank { l.name }, if (open != null) "${l.name} · Vault" else "${l.name} · Vault (tap to unlock)")
                     if (open != null) {
                         f.username?.let { if (l.username.isNotEmpty()) d.setValue(it, AutofillValue.forText(l.username)) }
@@ -240,7 +240,7 @@ class VaultAutofillService : AutofillService() {
                     b.addDataset(d.build()); any = true
                 }
                 f.otp?.let { otpId ->
-                    for (c in list.codesFor(f.webDomain, f.pkg, logins).take(4)) {
+                    for (c in list.codesFor(f.webDomain, f.pkg, logins).take(10)) {
                         val otp = c.otp
                         val d = if (open != null && otp != null) {
                             val code = Totp.code(otp)

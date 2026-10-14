@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One suggestion under a sign-in field: the Vault icon, the account big, what it is small. -->
+<!-- One suggestion in the list under a sign-in field: Vault's lock, the account big, what it is small.
+     Vault's own dark colours, so it reads the same whatever the system list behind it looks like. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:padding="12dp">
+    android:background="#1C1C1C"
+    android:paddingStart="14dp"
+    android:paddingEnd="14dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
     <ImageView
         android:layout_width="24dp"
         android:layout_height="24dp"
@@ -25,7 +30,7 @@
             android:ellipsize="end"
             android:textSize="15sp"
             android:textStyle="bold"
-            android:textColor="?android:attr/textColorPrimary" />
+            android:textColor="#F5F5F5" />
         <TextView
             android:id="@+id/af_sub"
             android:layout_width="match_parent"
@@ -33,6 +38,6 @@
             android:singleLine="true"
             android:ellipsize="end"
             android:textSize="12sp"
-            android:textColor="?android:attr/textColorSecondary" />
+            android:textColor="#969696" />
     </LinearLayout>
 </LinearLayout>
