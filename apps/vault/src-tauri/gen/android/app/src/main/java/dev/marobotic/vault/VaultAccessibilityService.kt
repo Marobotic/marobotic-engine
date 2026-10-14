@@ -90,19 +90,41 @@ class VaultAccessibilityService : AccessibilityService() {
         if (!node.refresh() || !node.isFocused || !node.isEditable) return hide()
         val pkg = node.packageName?.toString() ?: return hide()
         val key = keyOf(node)
-        if (key == doneWith || !wanted(node, pkg)) return hide()
+        if (key == doneWith) return hide()
         val form = Form.of(node) ?: return hide()
-        val rows = rowsFor(form, pkg)
+        val browser = isBrowser(pkg)
+        // In a browser, the site is what its address bar shows (the page can't write there).
+        val site = if (browser) siteIn(node) ?: return hide() else null
+        if (!wanted(node, pkg, form, browser)) return hide()
+        val rows = rowsFor(form, pkg, site)
+        android.util.Log.i("VaultOverlay", "field in $pkg site=$site otp=${form.otp} user=${form.user != null} pw=${form.password != null} rows=${rows.size}")
         if (rows.isEmpty()) return hide()
         field = node; fieldKey = key
         show(node, rows)
     }
 
-    /** Apps whose fields Android's list can't hold (React Native), and apps that never ask autofill. */
-    private fun wanted(n: AccessibilityNodeInfo, pkg: String): Boolean {
+    /**
+     * Who shows the list. 2FA code fields are always this list's (apps and browsers): Android asks for
+     * them late or not at all (Discord's code screen never asks; a browser's focused-on-load code box
+     * only shows Android's list after a tap elsewhere), so the autofill service leaves codes to it.
+     * Logins stay with Android's list, except in apps that never ask for one on this screen.
+     */
+    private fun wanted(n: AccessibilityNodeInfo, pkg: String, f: Form, browser: Boolean): Boolean {
+        if (f.otp) return true
+        if (browser) return false
         if (n.className?.startsWith("com.facebook.react") == true) return true
         val asked = AutofillStore.lastFillRequest[pkg] ?: 0L
-        return SystemClock.uptimeMillis() - windowAt > 600 && asked < windowAt && !isBrowser(pkg)
+        return SystemClock.uptimeMillis() - windowAt > 600 && asked < windowAt
+    }
+
+    /** The site a browser shows: its address bar ("discord.com/login" or a full address). */
+    private fun siteIn(n: AccessibilityNodeInfo): String? {
+        val root = n.window?.root ?: rootInActiveWindow ?: return null
+        val pkg = n.packageName ?: return null
+        val bar = listOf("url_bar", "mozac_browser_toolbar_url_view", "url_field", "location_bar_edit_text")
+            .firstNotNullOfOrNull { id -> root.findAccessibilityNodeInfosByViewId("$pkg:id/$id").firstOrNull() } ?: return null
+        val text = bar.text?.toString()?.trim()?.takeIf { it.isNotEmpty() && !it.contains(' ') } ?: return null
+        return text.substringAfter("://").substringBefore('/').substringBefore(':').lowercase().takeIf { it.contains('.') }
     }
 
     private fun isBrowser(pkg: String): Boolean = browsers.getOrPut(pkg) {
@@ -152,7 +174,8 @@ class VaultAccessibilityService : AccessibilityService() {
                 val all = { n: AccessibilityNodeInfo -> words(n) + " " + (texts[n] ?: "") }
                 val password = edits.firstOrNull { it.isPassword }
                 val me = edits.firstOrNull { it == focused } ?: focused
-                val otp = !me.isPassword && otpWords.containsMatchIn(all(me)) && password == null
+                val number = (me.inputType and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_NUMBER
+                val otp = !me.isPassword && password == null && (otpWords.containsMatchIn(all(me)) || (number && edits.size == 1))
                 val user = when {
                     password != null -> edits.takeWhile { it != password }.lastOrNull { !it.isPassword }
                     !otp && (isEmailInput(me) || userWords.containsMatchIn(all(me))) -> me   // a name-only first step
@@ -169,16 +192,16 @@ class VaultAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------- what the list offers
     private class Row(val title: String, val sub: String, val pick: () -> Unit)
 
-    private fun rowsFor(f: Form, pkg: String): List<Row> = with(AutofillStore) {
+    private fun rowsFor(f: Form, pkg: String, site: String?): List<Row> = with(AutofillStore) {
         val open = index
         if (open == null) {
             val hints = hints(this@VaultAccessibilityService) ?: return emptyList()
-            val logins = hints.loginsFor(null, pkg)
-            val any = if (f.otp) hints.codesFor(null, pkg, logins).isNotEmpty() else logins.isNotEmpty()
-            return if (any) listOf(Row("Unlock Vault", "Fingerprint or screen lock, then pick a login") { unlock() }) else emptyList()
+            val logins = hints.loginsFor(site, pkg)
+            val any = if (f.otp) hints.codesFor(site, pkg, logins).isNotEmpty() else logins.isNotEmpty()
+            return if (any) listOf(Row("Unlock Vault", if (f.otp) "Fingerprint or screen lock, then pick the code" else "Fingerprint or screen lock, then pick a login") { unlock() }) else emptyList()
         }
-        var logins = open.loginsFor(null, pkg)
-        if (f.otp) return open.codesFor(null, pkg, logins).take(10).mapNotNull { c ->
+        var logins = open.loginsFor(site, pkg)
+        if (f.otp) return open.codesFor(site, pkg, logins).take(10).mapNotNull { c ->
             val otp = c.otp ?: return@mapNotNull null
             val code = Totp.code(otp)
             Row(code.chunked(3).joinToString(" "), "2FA · ${c.who}") { setText(f.focused, Totp.code(otp)); done() }

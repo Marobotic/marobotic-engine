@@ -126,6 +126,8 @@ class VaultAutofillService : AutofillService() {
         AutofillStore.lastFillRequest[fields.pkg] = android.os.SystemClock.uptimeMillis()
         // Vault's own list (VaultAccessibilityService) serves React Native apps: Android's would vanish.
         val overlay = fields.reactNative && fields.webDomain == null && VaultAccessibilityService.instance != null
+        // Codes are that list's too, so they never show twice (see VaultAccessibilityService.wanted).
+        if (VaultAccessibilityService.instance != null) fields.otp = null
         val response = if (fields.own || !fields.any || overlay) null else respond(this, fields, inline)
         android.util.Log.i("VaultAutofill", "fill ${fields.pkg} web=${fields.webDomain} user=${fields.username != null} pw=${fields.password != null} new=${fields.newPasswords.size} otp=${fields.otp != null} " +
             "locked=${AutofillStore.index == null} logins=${(AutofillStore.index ?: AutofillStore.hints(this))?.let { with(AutofillStore) { it.loginsFor(fields.webDomain, fields.pkg).size } }} answered=${response != null} overlay=$overlay inline=${inline != null}${fields.seen}")
