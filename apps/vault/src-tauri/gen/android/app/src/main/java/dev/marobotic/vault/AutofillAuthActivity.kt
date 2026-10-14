@@ -60,6 +60,15 @@ class AutofillAuthActivity : AppCompatActivity() {
         }).authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 
+    /** The login's 2FA code to the clipboard (marked sensitive), for the sign-in step that asks for it. */
+    private fun copyCode(loginId: String) {
+        val otp = AutofillStore.index?.logins?.firstOrNull { it.id == loginId }?.otp ?: return
+        val clip = android.content.ClipData.newPlainText("2FA code", Totp.code(otp))
+        if (Build.VERSION.SDK_INT >= 33) clip.description.extras = android.os.PersistableBundle().apply { putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true) }
+        getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(clip)
+        android.widget.Toast.makeText(applicationContext, "Vault: 2FA code copied", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     private fun answer() {
         if (isFinishing) return
         @Suppress("DEPRECATION")
@@ -71,6 +80,7 @@ class AutofillAuthActivity : AppCompatActivity() {
             kind == "all" -> VaultAutofillService.respond(this, fields)
             else -> VaultAutofillService.datasetFor(this, fields, kind, intent.getStringExtra("ref") ?: "")
         }
+        if (result != null && kind == "login") copyCode(intent.getStringExtra("ref") ?: "")
         if (result != null) setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, result))
         else setResult(RESULT_CANCELED)
         finish()

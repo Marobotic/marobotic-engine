@@ -87,6 +87,8 @@ type AndroidBridge = {
   autofillState(): string;           // "on" | "off" | "unsupported"
   autofillProvider(): string;        // the app filling passwords now ("Vault", "Proton Pass", "")
   passkeyProviderIsVault(): boolean;
+  keptReady(): boolean;
+  keepReady(): void;
   openAutofillSettings(): void;
   unlockState(): string;             // "unavailable" | "ready" | "saved"
   unlockClear(): void;
@@ -111,6 +113,9 @@ export function takePasskeys(): Record<string, unknown>[] {
   try { return JSON.parse(android.takePasskeys() || "[]") as Record<string, unknown>[]; } catch { return []; }
 }
 export const autofillState = () => (android ? android.autofillState() : "unsupported");
+/** Android may pause Vault in the background (Samsung freezes it): autofill then answers late or not at all. */
+export const keptReady = () => { try { return android ? android.keptReady() : true; } catch { return true; } };
+export const keepReady = () => android?.keepReady();
 export const autofillProvider = () => (android ? android.autofillProvider() : "");
 export const passkeysOnVault = () => (android ? android.passkeyProviderIsVault() : false);
 export const openAutofillSettings = () => android?.openAutofillSettings();

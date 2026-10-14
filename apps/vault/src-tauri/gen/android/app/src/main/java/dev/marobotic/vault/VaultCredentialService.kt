@@ -46,6 +46,7 @@ class VaultCredentialService : CredentialProviderService() {
         fun entries(ctx: Context, request: BeginGetCredentialRequest): BeginGetCredentialResponse {
             val index = AutofillStore.index ?: return BeginGetCredentialResponse.Builder()
                 .addAuthenticationAction(AuthenticationAction("Unlock Vault", intent(ctx, "unlock"))).build()
+            val pkgLogins = with(AutofillStore) { index.loginsFor(null, request.callingAppInfo?.packageName ?: "") }
             val b = BeginGetCredentialResponse.Builder()
             val pkg = request.callingAppInfo?.packageName ?: ""
             for (option in request.beginGetCredentialOptions) when (option) {
@@ -58,7 +59,7 @@ class VaultCredentialService : CredentialProviderService() {
                             .setDisplayName(p.displayName.ifBlank { null }).build())
                 }
                 is BeginGetPasswordOption -> with(AutofillStore) {
-                    for (l in index.loginsFor(null, pkg).filter { it.password.isNotEmpty() }.take(6))
+                    for (l in pkgLogins.filter { it.password.isNotEmpty() }.take(30))
                         b.addCredentialEntry(PasswordCredentialEntry.Builder(ctx, l.who, intent(ctx, "getPassword", l.id), option)
                             .setDisplayName(l.name).build())
                 }
@@ -70,7 +71,10 @@ class VaultCredentialService : CredentialProviderService() {
 
     override fun onBeginGetCredentialRequest(request: BeginGetCredentialRequest, cancellationSignal: CancellationSignal,
                                              callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>) {
-        callback.onResult(entries(this, request))
+        val r = entries(this, request)
+        android.util.Log.i("VaultAutofill", "credman get ${request.callingAppInfo?.packageName} options=${request.beginGetCredentialOptions.map { it::class.simpleName }} " +
+            "entries=${r.credentialEntries.size} unlock=${r.authenticationActions.size} locked=${AutofillStore.index == null}")
+        callback.onResult(r)
     }
 
     override fun onBeginCreateCredentialRequest(request: BeginCreateCredentialRequest, cancellationSignal: CancellationSignal,

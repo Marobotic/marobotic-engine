@@ -252,6 +252,8 @@ class VaultAutofillService : AutofillService() {
                     if (open != null) {
                         f.username?.let { if (name.isNotEmpty()) d.setValue(it, AutofillValue.forText(name)) }
                         f.password?.let { d.setValue(it, AutofillValue.forText(l.password)) }
+                        // With a 2FA code: picking it goes through AutofillAuthActivity, which copies the code.
+                        if (l.hasOtp) d.setAuthentication(unlockIntent(ctx, "login", l.id))
                     } else {
                         // The username is no secret: it shows (and filters as you type); the rest comes after the unlock.
                         f.username?.let { d.setValue(it, if (name.isNotEmpty()) AutofillValue.forText(name) else null) }

@@ -107,6 +107,13 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    /** Whether Android may pause Vault in the background (Samsung freezes it, and autofill then waits). */
+    @JavascriptInterface fun keptReady(): Boolean = getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true
+    @JavascriptInterface fun keepReady() = runOnUiThread {
+      try { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:$packageName"))) }
+      catch (_: Exception) { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+    }
+
     // ---- unlock with fingerprint / screen lock (BiometricUnlock.kt); answers come as vault-native events
     @JavascriptInterface fun unlockState(): String = unlock.state()
     @JavascriptInterface fun unlockClear() = unlock.clear()

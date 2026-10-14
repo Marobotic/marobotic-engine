@@ -397,6 +397,10 @@ function settingsModal() {
           <div class="set">
             <div><b>Autofill in apps and browsers</b><span id="afState"></span></div>
             <button class="m-btn compact" id="afSet">Choose Vault</button>
+          </div>
+          <div class="set" id="readyRow" ${platform.keptReady() ? "hidden" : ""}>
+            <div><b>Keep Vault ready</b><span>Android pauses Vault in the background, so suggestions come late or not at all. Allow it to run without battery restrictions.</span></div>
+            <button class="m-btn compact" id="ready">Allow</button>
           </div>` : ""}
           ${platform.quickUnlock.state() !== "unavailable" ? `
           <div class="set">
@@ -458,6 +462,7 @@ function settingsModal() {
       $<HTMLButtonElement>("#afSet", back).textContent = st === "on" ? "Change" : "Choose Vault";
     };
     $("#afSet", back).onclick = () => platform.openAutofillSettings();
+    $("#ready", back)?.addEventListener("click", () => { platform.keepReady(); addEventListener("focus", () => ($("#readyRow", back).hidden = platform.keptReady()), { once: true }); });
     showAf();
     addEventListener("focus", showAf, { once: true });
   }
