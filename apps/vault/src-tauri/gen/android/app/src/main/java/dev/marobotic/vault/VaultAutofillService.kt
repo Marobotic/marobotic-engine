@@ -36,8 +36,6 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     /** The sign-in name field asks for an email ("Email or Phone Number", type=email, an email keyboard). */
     var usernameIsEmail = false
     var passwordValue = ""
-    /** A React Native screen (Discord): it drops focus when the keyboard opens, and Android's list goes with it. */
-    var reactNative = false
     private var lastText: AssistStructure.ViewNode? = null
     private var passwordIsCurrent = false
     // Vault's own screens are left alone, except for a self-test: adb shell setprop debug.vault.selftest 1
@@ -61,7 +59,6 @@ class Fields(structure: AssistStructure, ownPackage: String) {
         if (n.autofillId != null && (n.className?.contains("EditText") == true || n.htmlInfo?.tag.equals("input", true) || n.autofillHints != null))
             seen.append("\n  ${n.className?.substringAfterLast('.')} type=${n.autofillType} vis=${n.visibility} input=0x${Integer.toHexString(n.inputType)} hints=${n.autofillHints?.joinToString()} id=${n.idEntry} hint=${n.hint} html=${n.htmlInfo?.attributes?.joinToString { "${it.first}=${it.second}" }?.take(160)}")
         if (n.autofillId != null && n.autofillType == View.AUTOFILL_TYPE_TEXT && n.visibility == View.VISIBLE) {
-            if (n.className?.startsWith("com.facebook.react") == true) reactNative = true
             if (n.isFocused) focused = n.autofillId
             classify(n)
         }
@@ -123,12 +120,11 @@ class VaultAutofillService : AutofillService() {
         val structure = request.fillContexts.lastOrNull()?.structure ?: return callback.onSuccess(null)
         val fields = Fields(structure, packageName)
         val inline = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
-        AutofillStore.lastFillRequest[fields.pkg] = android.os.SystemClock.uptimeMillis()
-        // Vault's own list (VaultAccessibilityService) serves React Native apps: Android's would vanish.
-        val overlay = fields.reactNative && fields.webDomain == null && VaultAccessibilityService.instance != null
-        // Codes are that list's too, so they never show twice (see VaultAccessibilityService.wanted).
-        if (VaultAccessibilityService.instance != null) fields.otp = null
-        val response = if (fields.own || !fields.any || overlay) null else respond(this, fields, inline)
+        // With Vault's own list on (VaultAccessibilityService), it shows the suggestions in apps and the
+        // codes in browsers; Android's list keeps the rest, and still offers to save new logins.
+        val overlay = VaultAccessibilityService.instance != null
+        if (overlay) fields.otp = null
+        val response = if (fields.own || !fields.any) null else respond(this, fields, inline, listed = !(overlay && fields.webDomain == null))
         android.util.Log.i("VaultAutofill", "fill ${fields.pkg} web=${fields.webDomain} user=${fields.username != null} pw=${fields.password != null} new=${fields.newPasswords.size} otp=${fields.otp != null} " +
             "locked=${AutofillStore.index == null} logins=${(AutofillStore.index ?: AutofillStore.hints(this))?.let { with(AutofillStore) { it.loginsFor(fields.webDomain, fields.pkg).size } }} answered=${response != null} overlay=$overlay inline=${inline != null}${fields.seen}")
         callback.onSuccess(response)
@@ -220,7 +216,7 @@ class VaultAutofillService : AutofillService() {
          * the fingerprint or screen lock, then fills.
          */
         @Suppress("DEPRECATION")
-        fun respond(ctx: Context, f: Fields, inline: Any? = null): FillResponse? {
+        fun respond(ctx: Context, f: Fields, inline: Any? = null, listed: Boolean = true): FillResponse? {
             val b = FillResponse.Builder()
             val chips = Chips(ctx, inline)
             var any = false
@@ -232,7 +228,9 @@ class VaultAutofillService : AutofillService() {
             // no secrets, tell). The fingerprint or screen lock opens the sealed list, and Android then
             // shows the real suggestions. A sign-up form needs nothing unlocked: its strong password shows at once.
             val list = if (open == null && signUpOnly) hints ?: AutofillStore.Index(emptyList(), emptyList(), emptySet(), emptyMap(), emptyList()) else open
-            if (list == null) {
+            if (!listed) {
+                // Only the offer to save what's typed here.
+            } else if (list == null) {
                 val worth = hints == null || with(AutofillStore) {
                     hints.loginsFor(f.webDomain, f.pkg).isNotEmpty() || (f.otp != null && hints.codesFor(f.webDomain, f.pkg, hints.loginsFor(f.webDomain, f.pkg)).isNotEmpty())
                 }

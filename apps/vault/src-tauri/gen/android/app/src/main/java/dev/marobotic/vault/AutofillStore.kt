@@ -40,8 +40,6 @@ object AutofillStore {
     private val saves = mutableListOf<Save>()
     private val madePasskeys = mutableListOf<JSONObject>()
     val onUnlock = CopyOnWriteArrayList<() -> Unit>()
-    /** When Android last asked Vault to fill in each app (uptime ms): the overlay list leaves those apps to Android. */
-    val lastFillRequest = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val main = Handler(Looper.getMainLooper())
     private val relock = Runnable { index = null }
 

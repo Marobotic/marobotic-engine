@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
@@ -32,7 +31,8 @@ import android.widget.TextView
  * Android then hides the autofill list and doesn't show it again on that screen. With this turned on
  * (Settings > "Fill in apps like Discord"), Vault draws the same list itself, under the field: locked,
  * one "Unlock Vault" row (fingerprint or screen lock); unlocked, the app's logins with the email big,
- * and 2FA codes in a code field. Picking one types it in. Browsers and other apps keep Android's list.
+ * and 2FA codes in a code field. Picking one types it in. It serves every app, and 2FA codes in browsers;
+ * browser logins stay with Android's list (see wanted).
  *
  * It reads only the sign-in fields of the app in front, never their values except to narrow the list.
  */
@@ -43,8 +43,9 @@ class VaultAccessibilityService : AccessibilityService() {
     private var fieldKey = ""
     /** A field picked from just now: the list stays away until another field or screen. */
     private var doneWith = ""
-    private var windowAt = 0L
     private var pending: Runnable? = null
+    /** What the list shows now (titles), so a fresh look at the same field moves it instead of redrawing. */
+    private var showing = ""
 
     override fun onServiceConnected() { instance = this }
     override fun onUnbind(intent: Intent?): Boolean { hide(); instance = null; return super.onUnbind(intent) }
@@ -56,19 +57,24 @@ class VaultAccessibilityService : AccessibilityService() {
         if (pkg == packageName || pkg == "com.android.systemui") return
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (!isImePackage(pkg)) { windowAt = SystemClock.uptimeMillis(); doneWith = "" }
-                later(250) { refresh() }
+                if (!isImePackage(pkg)) doneWith = ""
+                later(120) { refresh() }
             }
             AccessibilityEvent.TYPE_VIEW_FOCUSED, AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 val n = e.source ?: return
+                // Focus left the field: wait a moment, as React Native apps hand it straight back.
                 if (!n.isEditable) return later(200) { refresh() }
-                if (e.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED && keyOf(n) == doneWith) doneWith = ""   // tapped again: show again
-                later(200) { consider(n) }
+                val key = keyOf(n)
+                if (e.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED || key != fieldKey) { if (key == doneWith) doneWith = "" }
+                pending?.let { main.removeCallbacks(it); pending = null }
+                consider(n)   // at once: the list is there when the field is
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 val n = e.source ?: return
-                if (overlay != null && keyOf(n) == fieldKey) later(80) { consider(n) }
+                if (keyOf(n) == fieldKey) later(60) { consider(n) }
             }
+            // The keyboard opened or closed: the list moves to fit.
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> if (overlay != null) later(60) { field?.let { consider(it) } }
         }
     }
 
@@ -84,7 +90,9 @@ class VaultAccessibilityService : AccessibilityService() {
         if (n == null || !n.isEditable) hide() else consider(n)
     }
 
-    private fun keyOf(n: AccessibilityNodeInfo) = "${n.packageName}|${n.windowId}|${n.viewIdResourceName}|${n.className}|${Rect().also(n::getBoundsInScreen).left},${Rect().also(n::getBoundsInScreen).top}"
+    /** A field, the same while the screen shifts for the keyboard or its password is shown. */
+    private fun keyOf(n: AccessibilityNodeInfo) =
+        "${n.packageName}|${n.windowId}|${n.viewIdResourceName}|${Form.isPasswordLike(n)}|${if (Build.VERSION.SDK_INT >= 26) n.hintText else ""}"
 
     private fun consider(node: AccessibilityNodeInfo) {
         if (!node.refresh() || !node.isFocused || !node.isEditable) return hide()
@@ -95,27 +103,22 @@ class VaultAccessibilityService : AccessibilityService() {
         val browser = isBrowser(pkg)
         // In a browser, the site is what its address bar shows (the page can't write there).
         val site = if (browser) siteIn(node) ?: return hide() else null
-        if (!wanted(node, pkg, form, browser)) return hide()
+        if (!wanted(form, browser)) return hide()
         val rows = rowsFor(form, pkg, site)
         android.util.Log.i("VaultOverlay", "field in $pkg site=$site otp=${form.otp} user=${form.user != null} pw=${form.password != null} rows=${rows.size}")
         if (rows.isEmpty()) return hide()
         field = node; fieldKey = key
-        show(node, rows)
+        show(node, rows, rows.joinToString("\n") { it.title + it.sub })
     }
 
     /**
-     * Who shows the list. 2FA code fields are always this list's (apps and browsers): Android asks for
-     * them late or not at all (Discord's code screen never asks; a browser's focused-on-load code box
-     * only shows Android's list after a tap elsewhere), so the autofill service leaves codes to it.
-     * Logins stay with Android's list, except in apps that never ask for one on this screen.
+     * Who shows the list, so there is only ever one. In apps, this list does (Android's comes and goes
+     * there: Discord drops it when the keyboard opens and never asks on its code screen). In browsers,
+     * Android's list keeps the logins (the browser tells it the site), and this one the 2FA codes: a code
+     * box focused when the page loads only gets Android's list after a tap elsewhere. The autofill
+     * service leaves out whatever is this list's (VaultAutofillService.onFillRequest).
      */
-    private fun wanted(n: AccessibilityNodeInfo, pkg: String, f: Form, browser: Boolean): Boolean {
-        if (f.otp) return true
-        if (browser) return false
-        if (n.className?.startsWith("com.facebook.react") == true) return true
-        val asked = AutofillStore.lastFillRequest[pkg] ?: 0L
-        return SystemClock.uptimeMillis() - windowAt > 600 && asked < windowAt
-    }
+    private fun wanted(f: Form, browser: Boolean): Boolean = f.otp || !browser
 
     /** The site a browser shows: its address bar ("discord.com/login" or a full address). */
     private fun siteIn(n: AccessibilityNodeInfo): String? {
@@ -143,6 +146,16 @@ class VaultAccessibilityService : AccessibilityService() {
             private val otpWords = Regex("otp|2fa|mfa|one.?time|verification|verify|security.?code|auth\\w*.?code|passcode|\\bcode\\b|6.?digit", RegexOption.IGNORE_CASE)
             private val userWords = Regex("user|e-?mail|login|account|phone|identifier|sign.?in", RegexOption.IGNORE_CASE)
             private val emailWords = Regex("e-?mail", RegexOption.IGNORE_CASE)
+            private val passwordWords = Regex("password|passwort|mot de passe|contrase|passcode", RegexOption.IGNORE_CASE)
+
+            /** A password box, also while the eye shows what's typed (it's plain text then). */
+            fun isPasswordLike(n: AccessibilityNodeInfo, before: String = ""): Boolean {
+                if (n.isPassword) return true
+                val v = n.inputType and InputType.TYPE_MASK_VARIATION
+                if ((n.inputType and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_TEXT &&
+                    (v == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD || v == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD || v == InputType.TYPE_TEXT_VARIATION_PASSWORD)) return true
+                return passwordWords.containsMatchIn(words(n) + " " + before)
+            }
 
             private fun words(n: AccessibilityNodeInfo) = listOfNotNull(
                 n.viewIdResourceName, n.contentDescription, if (Build.VERSION.SDK_INT >= 26) n.hintText else null,
@@ -160,24 +173,29 @@ class VaultAccessibilityService : AccessibilityService() {
             }
 
             fun of(focused: AccessibilityNodeInfo): Form? {
-                val root = focused.window?.root ?: return null
+                // Only the part of the screen around the field (each node is a call into the app, and a
+                // whole Discord screen is hundreds): a few levels up holds the sign-in form.
+                var top = focused
+                for (i in 0 until 6) top = top.parent ?: break
                 val edits = mutableListOf<AccessibilityNodeInfo>()
                 val texts = HashMap<AccessibilityNodeInfo, String>()   // each field with the text just before it
                 var lastText = ""
+                var seen = 0
                 fun walk(n: AccessibilityNodeInfo, depth: Int) {
-                    if (depth > 40 || edits.size > 12) return
+                    if (depth > 14 || edits.size > 8 || ++seen > 160) return
                     if (n.isEditable && n.isVisibleToUser) { edits.add(n); texts[n] = lastText }
                     else n.text?.toString()?.takeIf { it.isNotBlank() && it.length < 60 }?.let { lastText = it }
                     for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, depth + 1) }
                 }
-                walk(root, 0)
+                walk(top, 0)
+                if (edits.none { it == focused }) { edits.add(focused) }
                 val all = { n: AccessibilityNodeInfo -> words(n) + " " + (texts[n] ?: "") }
-                val password = edits.firstOrNull { it.isPassword }
+                val password = edits.firstOrNull { isPasswordLike(it, texts[it] ?: "") }
                 val me = edits.firstOrNull { it == focused } ?: focused
                 val number = (me.inputType and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_NUMBER
-                val otp = !me.isPassword && password == null && (otpWords.containsMatchIn(all(me)) || (number && edits.size == 1))
+                val otp = me != password && password == null && (otpWords.containsMatchIn(all(me)) || (number && edits.size == 1))
                 val user = when {
-                    password != null -> edits.takeWhile { it != password }.lastOrNull { !it.isPassword }
+                    password != null -> edits.takeWhile { it != password }.lastOrNull()
                     !otp && (isEmailInput(me) || userWords.containsMatchIn(all(me))) -> me   // a name-only first step
                     else -> null
                 }
@@ -252,8 +270,7 @@ class VaultAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------- the list itself
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun show(anchor: AccessibilityNodeInfo, rows: List<Row>) {
-        hide()
+    private fun show(anchor: AccessibilityNodeInfo, rows: List<Row>, what: String) {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val box = Rect().also(anchor::getBoundsInScreen)
         val screen = resources.displayMetrics
@@ -268,7 +285,20 @@ class VaultAccessibilityService : AccessibilityService() {
             below >= minOf(wantH, rowH * 2) || below >= above -> box.bottom + dp(4) to minOf(wantH, below)
             else -> box.top - dp(4) - minOf(wantH, above) to minOf(wantH, above)
         }
-        if (h < rowH / 2) return
+        if (h < rowH / 2) return hide()
+        val width = maxOf(box.width(), dp(260)).coerceAtMost(screen.widthPixels - dp(16))
+        val x = box.left.coerceIn(dp(8), maxOf(dp(8), screen.widthPixels - width - dp(8)))
+        overlay?.let { v ->
+            if (what == showing) {   // the same list: just follow the field
+                val p = v.layoutParams as WindowManager.LayoutParams
+                if (p.x != x || p.y != y || p.height != h || p.width != width) {
+                    p.x = x; p.y = y; p.height = h; p.width = width
+                    try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
+                }
+                return
+            }
+        }
+        hide()
 
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val inflater = LayoutInflater.from(this)
@@ -287,26 +317,26 @@ class VaultAccessibilityService : AccessibilityService() {
             background = GradientDrawable().apply { setColor(0xFF1C1C1C.toInt()); cornerRadius = dp(10).toFloat(); setStroke(1, 0xFF333333.toInt()) }
             clipToOutline = true
             elevation = dp(6).toFloat()
-            // A tap outside (the app, the keyboard) closes the list; the field itself brings it back.
+            // A tap outside (the app, the keyboard) closes it, so it never sits on the next field; tapping the field brings it back.
             setOnTouchListener { _, ev -> if (ev.action == MotionEvent.ACTION_OUTSIDE) { hide(); true } else false }
         }
-        val p = WindowManager.LayoutParams(
-            maxOf(box.width(), dp(260)).coerceAtMost(screen.widthPixels - dp(16)), h,
+        val p = WindowManager.LayoutParams(width, h,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = box.left.coerceIn(dp(8), maxOf(dp(8), screen.widthPixels - width - dp(8)))
+            this.x = x
             this.y = y
         }
-        try { wm.addView(scroll, p); overlay = scroll } catch (_: Exception) { overlay = null }
+        try { wm.addView(scroll, p); overlay = scroll; showing = what } catch (_: Exception) { overlay = null }
     }
 
     private fun hide() {
         overlay?.let { v -> try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) } catch (_: Exception) {} }
         overlay = null
+        showing = ""
     }
 
     companion object {
