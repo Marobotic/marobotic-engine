@@ -114,6 +114,34 @@ class MainActivity : TauriActivity() {
       catch (_: Exception) { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
 
+    /** Vault's own list in apps that hide Android's (VaultAccessibilityService), turned on in Accessibility settings. */
+    @JavascriptInterface fun overlayOn(): Boolean = VaultAccessibilityService.enabled(this@MainActivity)
+    @JavascriptInterface fun openOverlaySettings() = runOnUiThread {
+      val me = android.content.ComponentName(this@MainActivity, VaultAccessibilityService::class.java).flattenToString()
+      val tries = listOf(
+        Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").putExtra(Intent.EXTRA_COMPONENT_NAME, me),
+        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+      for (i in tries) { try { startActivity(i); return@runOnUiThread } catch (_: Exception) {} }
+    }
+
+    /** Installed browsers that keep their own autofill until told to use the phone's, with where that is. */
+    @JavascriptInterface fun browsers(): String {
+      val chromium = "In %s: Settings, Autofill services, Autofill using another service. Restart %s after changing it."
+      val known = listOf(
+        Triple("com.android.chrome", "Chrome", chromium), Triple("com.brave.browser", "Brave", chromium),
+        Triple("com.microsoft.emmx", "Edge", chromium), Triple("com.vivaldi.browser", "Vivaldi", chromium),
+        Triple("com.sec.android.app.sbrowser", "Samsung Internet", "Samsung Internet only fills with its own passwords and a few partners, so Vault can't fill there. Use Chrome or Brave to sign in to sites."))
+      val out = org.json.JSONArray()
+      for ((pkg, name, how) in known) {
+        val there = try { packageManager.getApplicationInfo(pkg, 0).enabled } catch (_: Exception) { false }
+        if (there) out.put(JSONObject().put("pkg", pkg).put("name", name).put("how", how.format(name, name)))
+      }
+      return out.toString()
+    }
+    @JavascriptInterface fun openApp(pkg: String) = runOnUiThread {
+      packageManager.getLaunchIntentForPackage(pkg)?.let { try { startActivity(it) } catch (_: Exception) {} }
+    }
+
     // ---- unlock with fingerprint / screen lock (BiometricUnlock.kt); answers come as vault-native events
     @JavascriptInterface fun unlockState(): String = unlock.state()
     @JavascriptInterface fun unlockClear() = unlock.clear()

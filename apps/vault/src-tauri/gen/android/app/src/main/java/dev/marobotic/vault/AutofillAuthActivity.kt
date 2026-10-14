@@ -23,6 +23,11 @@ import androidx.core.content.ContextCompat
 class AutofillAuthActivity : AppCompatActivity() {
     private val unlocked: () -> Unit = { runOnUiThread { answer() } }
 
+    companion object {
+        /** Opened from Vault's own list (VaultAccessibilityService): unlock, then that list shows the logins. */
+        const val OVERLAY = "overlay"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (AutofillStore.index != null) return answer()
@@ -63,14 +68,16 @@ class AutofillAuthActivity : AppCompatActivity() {
     /** The login's 2FA code to the clipboard (marked sensitive), for the sign-in step that asks for it. */
     private fun copyCode(loginId: String) {
         val otp = AutofillStore.index?.logins?.firstOrNull { it.id == loginId }?.otp ?: return
-        val clip = android.content.ClipData.newPlainText("2FA code", Totp.code(otp))
-        if (Build.VERSION.SDK_INT >= 33) clip.description.extras = android.os.PersistableBundle().apply { putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true) }
-        getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(clip)
-        android.widget.Toast.makeText(applicationContext, "Vault: 2FA code copied", android.widget.Toast.LENGTH_SHORT).show()
+        VaultAccessibilityService.copyCode(this, otp)
     }
 
     private fun answer() {
         if (isFinishing) return
+        if (intent.getStringExtra("kind") == OVERLAY) {
+            if (AutofillStore.index != null) VaultAccessibilityService.instance?.unlocked()
+            finish()
+            return
+        }
         @Suppress("DEPRECATION")
         val structure = intent.getParcelableExtra<AssistStructure>(AutofillManager.EXTRA_ASSIST_STRUCTURE)
         val fields = structure?.let { Fields(it, packageName) }

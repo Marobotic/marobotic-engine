@@ -6,6 +6,14 @@
     <!-- "Keep Vault ready": no battery restrictions, so autofill answers at once -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- telling browsers apart (they keep Android's own autofill list) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -60,6 +68,17 @@
                 <action android:name="android.service.credentials.CredentialProviderService" />
             </intent-filter>
             <meta-data android:name="android.credentials.provider" android:resource="@xml/credential_provider" />
+        </service>
+        <!-- Vault's own list under sign-in fields, for apps that hide Android's (Discord); off until turned on -->
+        <service
+            android:name=".VaultAccessibilityService"
+            android:label="Vault autofill in apps like Discord"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service" />
         </service>
         <activity
             android:name=".PasskeyActivity"

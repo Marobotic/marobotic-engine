@@ -90,6 +90,10 @@ type AndroidBridge = {
   keptReady(): boolean;
   keepReady(): void;
   openAutofillSettings(): void;
+  overlayOn(): boolean;              // Vault's own list in apps like Discord (an accessibility service)
+  openOverlaySettings(): void;
+  browsers(): string;                // JSON [{ name, pkg, how }] of installed browsers that need a setting of their own
+  openApp(pkg: string): void;
   unlockState(): string;             // "unavailable" | "ready" | "saved"
   unlockClear(): void;
   unlockSave(id: number, email: string, password: string): void;
@@ -119,6 +123,11 @@ export const keepReady = () => android?.keepReady();
 export const autofillProvider = () => (android ? android.autofillProvider() : "");
 export const passkeysOnVault = () => (android ? android.passkeyProviderIsVault() : false);
 export const openAutofillSettings = () => android?.openAutofillSettings();
+export const overlayOn = () => { try { return android ? android.overlayOn() : true; } catch { return true; } };
+export const openOverlaySettings = () => android?.openOverlaySettings();
+export type Browser = { name: string; pkg: string; how: string };
+export const browsers = (): Browser[] => { try { return android ? (JSON.parse(android.browsers() || "[]") as Browser[]) : []; } catch { return []; } };
+export const openApp = (pkg: string) => android?.openApp(pkg);
 
 // ------------------------------------------------------------------ Android: unlock with fingerprint / screen lock
 // The account password, sealed by the phone's keystore behind a fingerprint, face or the phone's PIN.

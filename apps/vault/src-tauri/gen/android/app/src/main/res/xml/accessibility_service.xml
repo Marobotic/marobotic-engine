@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vault's own list under sign-in fields, for apps where Android's autofill list can't stay up (Discord).
+     It reads the sign-in fields of the app in front; nothing else, and nothing leaves the phone. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeViewClicked|typeViewTextChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="50"
+    android:isAccessibilityTool="false"
+    android:settingsActivity="dev.marobotic.vault.MainActivity"
+    android:description="@string/a11y_description"
+    android:summary="@string/a11y_summary" />

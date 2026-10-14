@@ -344,6 +344,7 @@ async function unlocked() {
   await mergeCodes();
   void offerQuickUnlock();
   refreshAutofill();
+  offerSetup();
   const link = pendingLink ?? (await platform.takeLaunchLink());
   pendingLink = null;
   if (link) offerLink(link);
@@ -358,6 +359,69 @@ async function mergeCodes() {
   await save();
   renderList();
   toast(`${moved.size} 2FA code${moved.size === 1 ? "" : "s"} joined ${moved.size === 1 ? "its login" : "their logins"}: one entry each now`);
+}
+
+// ------------------------------------------------------------------ Android: setting up autofill
+// Everything Vault needs from the phone is asked here, by the person, never changed behind their back:
+// Vault as the autofill service, no battery pause, its own list for apps like Discord, and browsers that
+// keep their own autofill until told to use the phone's.
+type SetupStep = { id: string; title: string; text: string; done: boolean; button: string; act: () => void };
+
+function setupSteps(): SetupStep[] {
+  if (!platform.hasAutofill) return [];
+  let st = "unsupported", who = "";
+  try { st = platform.autofillState(); who = platform.autofillProvider(); } catch { /* shown as not done */ }
+  if (st === "unsupported") return [];
+  const steps: SetupStep[] = [
+    { id: "service", title: "Vault fills your passwords", done: st === "on" && who === "Vault", button: "Choose Vault", act: () => platform.openAutofillSettings(),
+      text: `${who && who !== "Vault" ? `${who} fills passwords now. ` : ""}Pick Vault under Passwords, passkeys & autofill (as the preferred service too, for passkeys).` },
+    { id: "ready", title: "Keep Vault ready", done: platform.keptReady(), button: "Allow", act: () => platform.keepReady(),
+      text: "Android pauses Vault in the background, and suggestions then come late or not at all. Allow it to run without battery restrictions." },
+    { id: "overlay", title: "Fill in apps like Discord", done: platform.overlayOn(), button: "Turn on", act: () => platform.openOverlaySettings(),
+      text: "Some apps hide Android's list as soon as the keyboard opens. Vault then shows its own list under the field. In the next screen, turn on \"Vault autofill in apps like Discord\". If Android says the setting is restricted: open Vault's App info, tap \u22ee, Allow restricted settings, and try again." },
+  ];
+  for (const b of platform.browsers()) {
+    const can = b.pkg !== "com.sec.android.app.sbrowser";   // Samsung Internet fills only with its own passwords and partners
+    steps.push({ id: `browser:${b.pkg}`, title: can ? `${b.name} uses Vault` : b.name, done: can && localStorage.getItem(`vault.setup.${b.pkg}`) === "done",
+      button: can ? `Open ${b.name}` : "", act: () => { localStorage.setItem(`vault.setup.${b.pkg}`, "done"); platform.openApp(b.pkg); }, text: b.how });
+  }
+  return steps;
+}
+
+/** After unlocking on a phone: the setup guide, while something is missing (until "Don't ask again"). */
+function offerSetup() {
+  if (localStorage.getItem("vault.setupDismissed") === "1" || document.querySelector(".setup")) return;
+  if (setupSteps().some((s) => !s.done && !s.id.startsWith("browser:"))) setupModal();
+}
+
+function setupModal() {
+  const back = h(`
+    <div class="backdrop">
+      <div class="m-modal modal settings setup">
+        <header>Set up autofill <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
+        <div class="content"><div id="steps"></div>
+          <div class="set"><div><span>You can come back to this any time: Settings, Set up autofill.</span></div>
+            <button class="m-btn subtle compact" id="never">Don't ask again</button><button class="m-btn compact" data-close>Done</button></div>
+        </div>
+      </div>
+    </div>`).firstElementChild as HTMLElement;
+  document.body.append(back);
+  const paint = () => {
+    const box = $("#steps", back);
+    box.innerHTML = setupSteps().map((s) => `
+      <div class="set"><div><b>${s.done ? "&#xf00c; " : ""}${esc(s.title)}</b><span>${esc(s.text)}</span></div>
+        ${s.button ? `<button class="m-btn compact ${s.done ? "subtle" : ""}" data-step="${esc(s.id)}">${s.done ? "Change" : esc(s.button)}</button>` : ""}</div>`).join("");
+    box.querySelectorAll<HTMLElement>("[data-step]").forEach((b) => (b.onclick = () => setupSteps().find((s) => s.id === b.dataset.step)?.act()));
+  };
+  paint();
+  // Back from Android's settings: show what changed.
+  const onFocus = () => paint();
+  addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onFocus);
+  const close = () => { removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); back.remove(); };
+  back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
+  back.onclick = (e) => { if (e.target === back) close(); };
+  $("#never", back).onclick = () => { localStorage.setItem("vault.setupDismissed", "1"); close(); };
 }
 
 // ------------------------------------------------------------------ settings
@@ -397,6 +461,10 @@ function settingsModal() {
           <div class="set">
             <div><b>Autofill in apps and browsers</b><span id="afState"></span></div>
             <button class="m-btn compact" id="afSet">Choose Vault</button>
+          </div>
+          <div class="set">
+            <div><b>Set up autofill</b><span>Everything Vault needs from this phone to fill logins and 2FA codes in apps and browsers, step by step.</span></div>
+            <button class="m-btn compact" id="setupOpen">Open</button>
           </div>
           <div class="set" id="readyRow" ${platform.keptReady() ? "hidden" : ""}>
             <div><b>Keep Vault ready</b><span>Android pauses Vault in the background, so suggestions come late or not at all. Allow it to run without battery restrictions.</span></div>
@@ -462,6 +530,7 @@ function settingsModal() {
       $<HTMLButtonElement>("#afSet", back).textContent = st === "on" ? "Change" : "Choose Vault";
     };
     $("#afSet", back).onclick = () => platform.openAutofillSettings();
+    $("#setupOpen", back).onclick = () => { close(); setupModal(); };
     $("#ready", back)?.addEventListener("click", () => { platform.keepReady(); addEventListener("focus", () => ($("#readyRow", back).hidden = platform.keptReady()), { once: true }); });
     showAf();
     addEventListener("focus", showAf, { once: true });
