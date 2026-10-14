@@ -10,6 +10,7 @@ import { siteOf } from "../src/icons.ts";
 import { MULTI, SAME_SIGN_IN, loginsFor, namedSite, siteKey } from "../src/domains.ts";
 import { allCodes, mergeCodesIntoLogins } from "../src/merge.ts";
 import { importLogins as importLoginsInto } from "../src/importLogins.ts";
+import { byUse, recordUse, useCounts } from "../src/usage.ts";
 import { entryIcon, openMenu, closeMenu, type MenuSection } from "./widgets.ts";
 import jsQRModule from "jsqr";
 // jsqr is CommonJS with a default export: bundlers and TypeScript disagree on which object that is.
@@ -302,6 +303,17 @@ function codeFor(login: LoginItem): OtpEntry | undefined {
   return matchTotp(login, standaloneCodes().map((i) => i.data))?.otp;
 }
 
+/** Logins picked on this device (copied here, or filled by Android autofill): +1 each, synced, so the
+ *  most picked comes first everywhere (src/usage.ts). Never shown. */
+async function used(ids: string[]) {
+  if (!vault || !ids.length) return;
+  const mine = localStorage.getItem("vault.usageId") ?? "";
+  const now = recordUse(vault, mine, ids);
+  if (now === mine && !ids.some((id) => vault!.get(id))) return;
+  localStorage.setItem("vault.usageId", now);
+  await save();
+}
+
 async function copy(text: string, said: string, clearAfter = 0): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); } catch { toast("Couldn't copy - the clipboard is busy, try again"); return false; }
   toast(said);
@@ -556,7 +568,9 @@ function renderList() {
   const list = $("#list");
   if (!list) return;
   const pinFirst = (af: boolean, bf: boolean) => (bf ? 1 : 0) - (af ? 1 : 0);
-  const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || a.data.name.localeCompare(b.data.name));
+  const uses = useCounts(vault!);
+  const n = (i: LoginRow) => uses.get(i.id) ?? 0;
+  const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || (query.trim() ? n(b) - n(a) : 0) || a.data.name.localeCompare(b.data.name) || n(b) - n(a));
   const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
   if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.email ?? ""} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
@@ -626,7 +640,7 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
   if (i.data.type === "login") {
     const d = i.data, linked = codeFor(d), who = d.username || d.name;
     const copies: MenuSection["items"] = [];
-    if (d.password) copies.push({ label: "Copy password", icon: "&#xf084;", onClick: () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000) });
+    if (d.password) copies.push({ label: "Copy password", icon: "&#xf084;", onClick: () => { void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000); void used([i.id]); } });
     if (d.email) copies.push({ label: "Copy email", icon: "&#xf0e0;", onClick: () => void copy(d.email!, `Email copied · ${d.name}`) });
     if (d.username) copies.push({ label: "Copy username", icon: "&#xf007;", onClick: () => void copy(d.username, `Username copied · ${d.name}`) });
     if (linked) copies.push({ label: "Copy 2FA code", icon: "&#xf023;", onClick: () => void copyCode(i.id, linked, who) });
@@ -676,7 +690,7 @@ function loginRow(i: LoginRow): HTMLElement {
   const who = d.email || d.username || d.name;
   row.querySelector<HTMLElement>("[data-cemail]")?.addEventListener("click", () => void copy(d.email!, `Email copied · ${d.name}`));
   row.querySelector<HTMLElement>("[data-cuser]")?.addEventListener("click", () => void copy(d.username, `Username copied · ${d.name}`));
-  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000));
+  row.querySelector<HTMLElement>("[data-cpass]")?.addEventListener("click", () => { void copy(d.password, `Password copied · ${who} (clears in 30s)`, 30_000); void used([i.id]); });
   row.querySelector<HTMLElement>("[data-ccode]")?.addEventListener("click", () => { if (linked) void copyCode(i.id, linked, who); });
   row.querySelector<HTMLElement>("[data-edit]")!.onclick = () => loginEditor(i);
   row.querySelector<HTMLElement>("[data-menu]")!.onclick = (e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); rowMenu(i, r.left, r.bottom + 4); };
@@ -1156,7 +1170,8 @@ const otpOf = (o: OtpEntry) => ({ secret: o.secret, digits: o.digits, period: o.
  *  `rules` carries the same site-matching tables the browser extension uses. */
 function refreshAutofill() {
   if (!platform.hasAutofill || !vault) return;
-  const ls = logins(), cs = otps();
+  const counts = useCounts(vault);
+  const ls = byUse(logins(), counts), cs = otps();
   platform.setAutofill({
     rules: { multi: [...MULTI], groups: SAME_SIGN_IN },
     logins: ls.map((l) => {
@@ -1167,6 +1182,7 @@ function refreshAutofill() {
         id: l.id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", password: l.data.password, hosts,
         words: [...new Set([word(l.data.name), ...hosts.map((x) => word(siteKey(x).split(".")[0] ?? ""))].filter((w) => w.length > 2))],
         ...(otp ? { otp: otpOf(otp) } : {}),
+        uses: counts.get(l.id) ?? 0,
       };
     }),
     codes: cs.map((c) => ({ id: c.id, issuer: nameOf(c), account: c.data.otp.account, words: [word(c.data.otp.issuer), word(nameOf(c))].filter((w) => w.length > 2), otp: otpOf(c.data.otp) })),
@@ -1202,6 +1218,8 @@ async function takeAndroidSaves() {
     toast(`Login saved · ${name}`);
   }
   if (saves.length) { await save(); renderList(); }
+  const picked = platform.takeUses();
+  if (picked.length) { await used(picked); renderList(); }
 }
 
 // ------------------------------------------------------------------ start

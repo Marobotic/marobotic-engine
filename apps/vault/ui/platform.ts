@@ -84,6 +84,7 @@ type AndroidBridge = {
   takeSaves(): string;
   takePasskeys(): string;
   takeLink(): string;
+  takeUses(): string;                // JSON [loginId, ...]: logins picked in Android autofill since last asked
   autofillState(): string;           // "on" | "off" | "unsupported"
   autofillProvider(): string;        // the app filling passwords now ("Vault", "Proton Pass", "")
   passkeyProviderIsVault(): boolean;
@@ -115,6 +116,11 @@ export function takeSaves(): SaveRequest[] {
 export function takePasskeys(): Record<string, unknown>[] {
   if (!android) return [];
   try { return JSON.parse(android.takePasskeys() || "[]") as Record<string, unknown>[]; } catch { return []; }
+}
+/** Logins picked in Android autofill (one id per pick), for the usage counts (src/usage.ts). */
+export function takeUses(): string[] {
+  if (!android) return [];
+  try { return JSON.parse(android.takeUses() || "[]") as string[]; } catch { return []; }
 }
 export const autofillState = () => (android ? android.autofillState() : "unsupported");
 /** Android may pause Vault in the background (Samsung freezes it): autofill then answers late or not at all. */

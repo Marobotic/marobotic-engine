@@ -15,7 +15,9 @@ export type PasskeyItem = {
   displayName?: string; rpName?: string; created?: number; favorite?: boolean;
 };
 export type NoteItem = { type: "note"; title: string; body: string };
-export type ItemData = TotpItem | LoginItem | PasskeyItem | NoteItem;
+/** How often each login was picked on one device (src/usage.ts). Hidden: never listed. */
+export type UsageItem = { type: "usage"; counts: Record<string, number> };
+export type ItemData = TotpItem | LoginItem | PasskeyItem | NoteItem | UsageItem;
 export type Item = { id: string; updated: number; data: ItemData };
 
 /** What leaves the device for each item. */

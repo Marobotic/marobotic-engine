@@ -70,6 +70,7 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface fun clearAutofill() = AutofillStore.clear()
     @JavascriptInterface fun takeSaves(): String = AutofillStore.takeSaves()
     @JavascriptInterface fun takePasskeys(): String = AutofillStore.takePasskeys()
+    @JavascriptInterface fun takeUses(): String = AutofillStore.takeUses(this@MainActivity)
     @JavascriptInterface fun takeLink(): String = AutofillStore.pendingLink.also { AutofillStore.pendingLink = null } ?: ""
     @JavascriptInterface fun autofillState(): String {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return "unsupported"

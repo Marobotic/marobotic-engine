@@ -117,6 +117,7 @@ private fun selfTest(): Boolean = runCatching {
 @RequiresApi(Build.VERSION_CODES.O)
 class VaultAutofillService : AutofillService() {
     override fun onFillRequest(request: FillRequest, cancel: CancellationSignal, callback: FillCallback) {
+        countPicks()
         val structure = request.fillContexts.lastOrNull()?.structure ?: return callback.onSuccess(null)
         val fields = Fields(structure, packageName)
         val inline = if (Build.VERSION.SDK_INT >= 30) request.inlineSuggestionsRequest else null
@@ -128,6 +129,21 @@ class VaultAutofillService : AutofillService() {
         android.util.Log.i("VaultAutofill", "fill ${fields.pkg} web=${fields.webDomain} user=${fields.username != null} pw=${fields.password != null} new=${fields.newPasswords.size} otp=${fields.otp != null} " +
             "locked=${AutofillStore.index == null} logins=${(AutofillStore.index ?: AutofillStore.hints(this))?.let { with(AutofillStore) { it.loginsFor(fields.webDomain, fields.pkg).size } }} answered=${response != null} overlay=$overlay inline=${inline != null}${fields.seen}")
         callback.onSuccess(response)
+    }
+
+    /** Logins picked from Android's list since the last answer: +1 each (AutofillStore.addUse). Each
+     *  answer carries its own tag, so a pick is never counted twice. Picks that needed a fingerprint
+     *  are counted in AutofillAuthActivity instead (their row has no id). */
+    private fun countPicks() {
+        val events = try { fillEventHistory?.events } catch (_: Exception) { null } ?: return
+        for (e in events) {
+            if (e.type != android.service.autofill.FillEventHistory.Event.TYPE_DATASET_SELECTED) continue
+            val id = e.datasetId?.removePrefix("login:")?.takeIf { e.datasetId!!.startsWith("login:") } ?: continue
+            val tag = e.clientState?.getString("answer") ?: continue
+            if (!counted.add("$tag/$id")) continue
+            AutofillStore.addUse(this, id)
+        }
+        while (counted.size > 200) counted.remove(counted.first())
     }
 
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
@@ -154,6 +170,8 @@ class VaultAutofillService : AutofillService() {
 
     companion object {
         private val random = SecureRandom()
+        /** Picks already counted (answer tag/login), for the life of the app: the service itself comes and goes. */
+        private val counted = LinkedHashSet<String>()
 
         private fun row(ctx: Context, title: String, sub: String): RemoteViews =
             RemoteViews(ctx.packageName, R.layout.autofill_item).apply {
@@ -259,7 +277,7 @@ class VaultAutofillService : AutofillService() {
                         f.username?.let { if (name.isNotEmpty()) d.setValue(it, AutofillValue.forText(name)) }
                         f.password?.let { d.setValue(it, AutofillValue.forText(l.password)) }
                         // With a 2FA code: picking it goes through AutofillAuthActivity, which copies the code.
-                        if (l.hasOtp) d.setAuthentication(unlockIntent(ctx, "login", l.id))
+                        if (l.hasOtp) d.setAuthentication(unlockIntent(ctx, "login", l.id)) else d.setId("login:${l.id}")
                     } else {
                         // The username is no secret: it shows (and filters as you type); the rest comes after the unlock.
                         f.username?.let { d.setValue(it, if (name.isNotEmpty()) AutofillValue.forText(name) else null) }
@@ -292,6 +310,7 @@ class VaultAutofillService : AutofillService() {
                 save.setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
                 b.setSaveInfo(save.build()); any = true
             }
+            if (any) b.setClientState(android.os.Bundle().apply { putString("answer", java.util.UUID.randomUUID().toString()) })
             return if (any) b.build() else null
         }
     }

@@ -19,7 +19,7 @@ import javax.crypto.spec.SecretKeySpec
  */
 object AutofillStore {
     class Otp(val secret: String, val digits: Int, val period: Int, val algorithm: String)
-    class Login(val id: String, val name: String, val username: String, val email: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?, val hasOtp: Boolean) {
+    class Login(val id: String, val name: String, val username: String, val email: String, val password: String, val hosts: List<String>, val words: List<String>, val otp: Otp?, val hasOtp: Boolean, val uses: Int = 0) {
         /** What the list shows big: the email when there is one (most sites sign in with it), else the username. */
         val who get() = email.ifBlank { username }.ifBlank { name }
         /** What goes into the sign-in name field: an email field gets the email, a username field the username. */
@@ -45,11 +45,33 @@ object AutofillStore {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("vault.autofill", Context.MODE_PRIVATE)
 
+    // ---------------------------------------------------------------- which logins get picked
+    // Each pick here is +1 for that login (src/usage.ts): Vault's window takes them in, counts them in
+    // the vault and syncs, so the most picked login comes first on every device. Only ids are kept.
+    private val picked = HashMap<String, Int>()   // picks not yet in the list Vault's window sent
+
+    fun addUse(ctx: Context, loginId: String) {
+        if (loginId.isBlank()) return
+        synchronized(picked) {
+            picked[loginId] = (picked[loginId] ?: 0) + 1
+            val waiting = JSONArray(prefs(ctx).getString("picked", "[]")).put(loginId)
+            prefs(ctx).edit().putString("picked", waiting.toString()).apply()
+        }
+    }
+
+    /** For Vault's window: the picks since it last asked (kept on disk while Vault is locked). */
+    fun takeUses(ctx: Context): String = synchronized(picked) {
+        prefs(ctx).getString("picked", "[]").also { prefs(ctx).edit().remove("picked").apply() } ?: "[]"
+    }
+
+    private fun usesOf(l: Login) = l.uses + synchronized(picked) { picked[l.id] ?: 0 }
+
     /** From Vault's window: the vault is open. Kept in memory, and the hints + sealed copy are refreshed. */
     fun set(ctx: Context, json: String) {
         val wasLocked = index == null
         main.removeCallbacks(relock)
         index = withMade(parse(JSONObject(json), secrets = true))
+        synchronized(picked) { if (prefs(ctx).getString("picked", null) == null) picked.clear() }   // counted in the vault now
         remember(ctx, json)
         if (wasLocked) onUnlock.forEach { it() }
     }
@@ -75,7 +97,7 @@ object AutofillStore {
         val hints = JSONObject().put("rules", o.optJSONObject("rules") ?: JSONObject())
             .put("logins", JSONArray((o.optJSONArray("logins")?.objects() ?: emptyList()).map { l ->
                 JSONObject().put("id", l.getString("id")).put("name", l.optString("name")).put("username", l.optString("username")).put("email", l.optString("email"))
-                    .put("hosts", l.optJSONArray("hosts") ?: JSONArray()).put("words", l.optJSONArray("words") ?: JSONArray()).put("hasOtp", l.has("otp"))
+                    .put("hosts", l.optJSONArray("hosts") ?: JSONArray()).put("words", l.optJSONArray("words") ?: JSONArray()).put("hasOtp", l.has("otp")).put("uses", l.optInt("uses"))
             }))
             .put("codes", JSONArray((o.optJSONArray("codes")?.objects() ?: emptyList()).map { c ->
                 JSONObject().put("id", c.getString("id")).put("issuer", c.optString("issuer")).put("account", c.optString("account")).put("words", c.optJSONArray("words") ?: JSONArray())
@@ -101,7 +123,7 @@ object AutofillStore {
         val logins = o.optJSONArray("logins")?.objects()?.map {
             val otp = if (secrets) it.optJSONObject("otp")?.toOtp() else null
             Login(it.getString("id"), it.optString("name"), it.optString("username"), it.optString("email"), if (secrets) it.optString("password") else "",
-                it.optJSONArray("hosts")?.strings() ?: emptyList(), it.optJSONArray("words")?.strings() ?: emptyList(), otp, otp != null || it.optBoolean("hasOtp"))
+                it.optJSONArray("hosts")?.strings() ?: emptyList(), it.optJSONArray("words")?.strings() ?: emptyList(), otp, otp != null || it.optBoolean("hasOtp"), it.optInt("uses"))
         } ?: emptyList()
         val codes = o.optJSONArray("codes")?.objects()?.map {
             Code(it.getString("id"), it.optString("issuer"), it.optString("account"), it.optJSONArray("words")?.strings() ?: emptyList(), if (secrets) it.optJSONObject("otp")?.toOtp() else null)
@@ -150,15 +172,17 @@ object AutofillStore {
     }
     private fun Index.siteKey(host: String) = registrable(host).let { groups[it] ?: it }
 
-    /** The logins for a web page (by its domain) or an app (by its package), best first. */
+    /** The logins for a web page (by its domain) or an app (by its package), best first: the one picked
+     *  most, then (on a web page) an exact host before the rest of the site. */
     fun Index.loginsFor(domain: String?, pkg: String): List<Login> {
         if (!domain.isNullOrBlank()) {
             val key = siteKey(domain)
             val host = domain.lowercase().removePrefix("www.")
-            return logins.filter { l -> l.hosts.any { siteKey(it) == key } }.sortedByDescending { l -> l.hosts.contains(host) }
+            return logins.filter { l -> l.hosts.any { siteKey(it) == key } }
+                .sortedWith(compareByDescending<Login> { usesOf(it) }.thenByDescending { it.hosts.contains(host) })
         }
         val words = packageWords(pkg)
-        return logins.filter { l -> l.hosts.contains(pkg.lowercase()) || l.words.any { it in words } }
+        return logins.filter { l -> l.hosts.contains(pkg.lowercase()) || l.words.any { it in words } }.sortedByDescending { usesOf(it) }
     }
 
     /** One-time codes: those of the matching logins first, then 2FA entries named after the site or app. */

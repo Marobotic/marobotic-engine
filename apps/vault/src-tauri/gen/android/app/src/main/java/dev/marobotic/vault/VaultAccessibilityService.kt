@@ -246,6 +246,7 @@ class VaultAccessibilityService : AccessibilityService() {
         f.user?.let { if (name.isNotEmpty()) setText(it, name) }
         f.password?.let { setText(it, l.password) }
         l.otp?.let { copyCode(this, it) }
+        AutofillStore.addUse(this, l.id)
         done()
     }
 

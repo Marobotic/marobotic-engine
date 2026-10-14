@@ -87,7 +87,10 @@ class AutofillAuthActivity : AppCompatActivity() {
             kind == "all" -> VaultAutofillService.respond(this, fields)
             else -> VaultAutofillService.datasetFor(this, fields, kind, intent.getStringExtra("ref") ?: "")
         }
-        if (result != null && kind == "login") copyCode(intent.getStringExtra("ref") ?: "")
+        if (result != null && kind == "login") {
+            copyCode(intent.getStringExtra("ref") ?: "")
+            AutofillStore.addUse(this, intent.getStringExtra("ref") ?: "")
+        }
         if (result != null) setResult(RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, result))
         else setResult(RESULT_CANCELED)
         finish()

@@ -66,12 +66,14 @@ export function fillableUrl(pageUrl: string): boolean {
 
 type LoginLike = { name: string; urls: string[]; username: string; totpId?: string };
 
-/** The saved logins for a page, best first (an exact host before the rest of the site). */
-export function loginsFor<T extends { data: LoginLike }>(pageUrl: string, logins: T[]): T[] {
+/** The saved logins for a page, best first: the one picked most (`uses`, see usage.ts), then an exact
+ *  host before the rest of the site. */
+export function loginsFor<T extends { id?: string; data: LoginLike }>(pageUrl: string, logins: T[], uses?: Map<string, number>): T[] {
   const host = hostOf(pageUrl);
   const exact = (l: T) => l.data.urls.some((u) => hostOf(u) === host);
+  const n = (l: T) => (l.id && uses?.get(l.id)) || 0;
   return logins.filter((l) => l.data.urls.some((u) => sameSite(u, pageUrl)) || (!l.data.urls.length && namedFor(l.data.name, pageUrl)))
-    .sort((a, b) => Number(exact(b)) - Number(exact(a)));
+    .sort((a, b) => n(b) - n(a) || Number(exact(b)) - Number(exact(a)));
 }
 
 /** A login saved with no address (some exports leave it out) belongs to the site its name names, exactly:
@@ -86,10 +88,10 @@ const word = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The 2FA codes for a page: those linked to (or matching) its logins first, then any whose service
  *  name is the site's name ("GitHub" on github.com). */
-export function codesFor<C extends { id: string; data: { otp: OtpEntry } }, L extends { id?: string; data: LoginLike }>(pageUrl: string, codes: C[], logins: L[]): C[] {
+export function codesFor<C extends { id: string; data: { otp: OtpEntry } }, L extends { id?: string; data: LoginLike }>(pageUrl: string, codes: C[], logins: L[], uses?: Map<string, number>): C[] {
   const out: C[] = [];
   const add = (c: C | undefined) => { if (c && !out.includes(c)) out.push(c); };
-  for (const l of loginsFor(pageUrl, logins)) {
+  for (const l of loginsFor(pageUrl, logins, uses)) {
     if (l.id) add(codes.find((c) => c.id === l.id));   // the login's own code (see allCodes)
     add(l.data.totpId ? codes.find((c) => c.id === l.data.totpId) : undefined);
     add(matchTotp(l.data, codes.map((c) => ({ otp: c.data.otp, c })))?.c);

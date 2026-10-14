@@ -15,6 +15,7 @@ import { generatePassword, hostOf, matchTotp } from "../../vault/src/passwords.t
 import { siteOf } from "../../vault/src/icons.ts";
 import { createPasskey, passkeysFor, rpIdFor, signIn as passkeySignIn, b64url, fromB64url } from "../../vault/src/passkeys.ts";
 import { allCodes, mergeCodesIntoLogins } from "../../vault/src/merge.ts";
+import { recordUse, useCounts } from "../../vault/src/usage.ts";
 import * as account from "../../vault/ui/account.ts";
 import { DEFAULTS, type CodeHit, type Detail, type LoginInput, type Msg, type PkCreate, type PkGet, type Settings, type State, type Summary } from "./messages.ts";
 
@@ -169,12 +170,23 @@ const linkedCode = (l: LoginRow) => codes().find((c) => c.id === l.id)
   ?? (l.data.totpId ? codes().find((c) => c.id === l.data.totpId) : undefined) ?? matchTotp(l.data, standaloneCodes().map((c) => ({ otp: c.data.otp, c })))?.c;
 const loginSite = (l: LoginItem) => siteOf({ urls: l.urls, name: l.name });
 
+/** How often each login was picked (all devices): the most picked is suggested first. */
+const uses = () => (vault ? useCounts(vault) : new Map<string, number>());
+/** A login picked here: +1 in this browser's own count, synced. */
+async function used(id: string) {
+  if (!vault) return;
+  const mine = await local.get("usageId", "");
+  const now = recordUse(vault, mine, [id]);
+  if (now !== mine) await local.set({ usageId: now });
+  await save();
+}
+
 async function matches(url: string) {
   if (!fillableUrl(url)) return { logins: [], codes: [], passkeys: [] };
   const s = await settings();
   return {
-    logins: s.suggest ? loginsFor(url, logins()).map((l) => ({ id: l.id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", site: loginSite(l.data) })) : [],
-    codes: s.suggestCodes ? await Promise.all(codesFor(url, codes(), logins()).map(codeHit)) : [],
+    logins: s.suggest ? loginsFor(url, logins(), uses()).map((l) => ({ id: l.id, name: l.data.name, username: l.data.username, email: l.data.email ?? "", site: loginSite(l.data) })) : [],
+    codes: s.suggestCodes ? await Promise.all(codesFor(url, codes(), logins(), uses()).map(codeHit)) : [],
     passkeys: s.passkeys ? passkeys().filter(passkeyOn(hostOf(url))).map((p) => ({ id: p.id, rpId: p.data.rpId, username: p.data.username, displayName: p.data.displayName ?? "" })) : [],
   };
 }
@@ -182,8 +194,9 @@ async function matches(url: string) {
 async function summaries(q: string, siteUrl: string | null): Promise<Summary[]> {
   const needle = q.trim().toLowerCase();
   const hit = (s: string) => !needle || s.toLowerCase().includes(needle);
-  const ls = siteUrl ? loginsFor(siteUrl, logins()) : logins();
-  const cs = (siteUrl ? codesFor(siteUrl, codes(), logins()) : codes()).filter((c) => !c.data.inLogin);
+  const counts = uses();
+  const ls = siteUrl ? loginsFor(siteUrl, logins(), counts) : logins();
+  const cs = (siteUrl ? codesFor(siteUrl, codes(), logins(), counts) : codes()).filter((c) => !c.data.inLogin);
   const ps = siteUrl ? passkeys().filter(passkeyOn(hostOf(siteUrl))) : passkeys();
   const out: Summary[] = [];
   for (const l of ls) if (hit(`${l.data.name} ${l.data.email ?? ""} ${l.data.username} ${l.data.urls.join(" ")}`)) {
@@ -197,7 +210,9 @@ async function summaries(q: string, siteUrl: string | null): Promise<Summary[]> 
   }
   for (const p of ps) if (hit(`${p.data.rpName ?? ""} ${p.data.rpId} ${p.data.username}`))
     out.push({ id: p.id, kind: "passkey", title: p.data.rpName || p.data.rpId, sub: p.data.username, site: siteKey(p.data.rpId), favorite: p.data.favorite });
-  return out.sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite) || a.title.localeCompare(b.title));
+  // This site: the most picked first. All items: by name, the most picked first among the same name.
+  const n = (x: Summary) => counts.get(x.id) ?? 0;
+  return out.sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite) || (siteUrl ? n(b) - n(a) : 0) || a.title.localeCompare(b.title) || n(b) - n(a));
 }
 
 async function detail(id: string): Promise<Detail | { error: string }> {
@@ -352,6 +367,7 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
       const l = vault && fillableUrl(url) ? loginsFor(url, logins()).find((x) => x.id === m.id) : undefined;
       if (!l) return { error: "not for this site" };
       const c = linkedCode(l);
+      void used(l.id);
       return { username: l.data.username, email: l.data.email ?? "", password: l.data.password, ...(c ? { code: (await fresh(c.data.otp)).code } : {}) };
     }
     case "code": {
@@ -396,6 +412,7 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
       const l = tab?.url && vault ? loginsFor(tab.url, logins()).find((x) => x.id === m.id) : undefined;
       if (!tab?.id || !l) return { error: "This login isn't for the page that's open." };
       const c = linkedCode(l);
+      void used(l.id);
       await chrome.tabs.sendMessage(tab.id, { t: "doFill", username: l.data.username, email: l.data.email ?? "", password: l.data.password, code: c ? (await fresh(c.data.otp)).code : "" }, { frameId: 0 });
       return { ok: true };
     }
