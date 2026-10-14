@@ -22,7 +22,7 @@ object Inline {
         val attribution = PendingIntent.getActivity(ctx, 0, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val content = InlineSuggestionUi.newContentBuilder(attribution)
             .setTitle(title).setSubtitle(sub).setContentDescription("$title, $sub")
-            .setStartIcon(Icon.createWithResource(ctx, R.mipmap.ic_launcher)).build()
+            .setStartIcon(Icon.createWithResource(ctx, R.drawable.ic_vault_chip)).build()
         return InlinePresentation(content.slice, spec, false)
     }
 }

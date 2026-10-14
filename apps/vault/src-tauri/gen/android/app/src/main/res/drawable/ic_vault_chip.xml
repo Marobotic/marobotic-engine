@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vault's mark for suggestion chips and rows: the gold lock with the red keyhole, on a 9x10 grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="11" android:viewportHeight="11">
+    <path android:fillColor="#F0BE66" android:pathData="M3,0.5h5v1h1v3h-1v-3h-5v3h-1v-3h1z" />
+    <path android:fillColor="#F0BE66" android:pathData="M1,4.5h9v6h-9z" />
+    <path android:fillColor="#B14242" android:pathData="M4.5,5.5h2v2h-2zM5,7.5h1v2h-1z" />
+</vector>

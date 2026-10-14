@@ -77,16 +77,21 @@ class MainActivity : TauriActivity() {
       if (!am.isAutofillSupported) return "unsupported"
       return if (am.hasEnabledAutofillServices()) "on" else "off"
     }
-    /** The app now filling passwords on this phone (autofill, and passkeys on Android 14+), by name. */
-    @JavascriptInterface fun autofillProvider(): String {
-      val ids = listOf("autofill_service", "credential_service_primary", "credential_service")
-        .mapNotNull { Settings.Secure.getString(contentResolver, it)?.split(":")?.firstOrNull()?.substringBefore("/")?.takeIf { p -> p.isNotBlank() } }
-      val pkg = ids.firstOrNull() ?: return ""
-      if (pkg == packageName) return "Vault"
-      return try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
-    }
-    @JavascriptInterface fun passkeyProviderIsVault(): Boolean =
-      listOf("credential_service_primary", "credential_service").any { Settings.Secure.getString(contentResolver, it)?.contains("$packageName/") == true }
+    /** The app now filling passwords on this phone, by name. Only autofill_service is readable by apps
+     *  (the credential_service keys are system-only since Android 12). */
+    @JavascriptInterface fun autofillProvider(): String = try {
+      val pkg = Settings.Secure.getString(contentResolver, "autofill_service")?.substringBefore("/")?.takeIf { it.isNotBlank() }
+      when (pkg) {
+        null -> ""
+        packageName -> "Vault"
+        else -> packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+      }
+    } catch (_: Exception) { "" }
+    /** Whether Vault is an enabled passkey/password provider (Android 14+ public API). */
+    @JavascriptInterface fun passkeyProviderIsVault(): Boolean = try {
+      Build.VERSION.SDK_INT >= 34 && getSystemService(android.credentials.CredentialManager::class.java)
+        ?.isEnabledCredentialProviderService(android.content.ComponentName(this@MainActivity, VaultCredentialService::class.java)) == true
+    } catch (_: Exception) { false }
 
     /** Android's "Passwords, passkeys & autofill" picker, else the older autofill picker, else Settings. */
     @JavascriptInterface fun openAutofillSettings() = runOnUiThread {

@@ -36,7 +36,8 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     var passwordValue = ""
     private var lastText: AssistStructure.ViewNode? = null
     private var passwordIsCurrent = false
-    val own = pkg == ownPackage
+    // Vault's own screens are left alone, except for a self-test: adb shell setprop debug.vault.selftest 1
+    val own = pkg == ownPackage && !selfTest()
     /** What was seen, for logcat (tag VaultAutofill): field kinds and hints, never values. */
     val seen = StringBuilder()
 
@@ -44,6 +45,8 @@ class Fields(structure: AssistStructure, ownPackage: String) {
         for (i in 0 until structure.windowNodeCount) visit(structure.getWindowNodeAt(i).rootViewNode)
         // Two password boxes and the first isn't "current password": a sign-up form, both are new.
         if (newPasswords.isNotEmpty() && !passwordIsCurrent) password?.let { newPasswords.add(0, it); password = null }
+        // Self-test on Vault's own sign-in page: pretend it's another site (adb shell setprop debug.vault.selftest.site discord.com).
+        if (pkg == ownPackage) selfTestSite()?.let { webDomain = it }
     }
 
     val any get() = username != null || password != null || newPasswords.isNotEmpty() || otp != null
@@ -94,6 +97,14 @@ class Fields(structure: AssistStructure, ownPackage: String) {
         }
     }
 }
+
+private fun selfTestSite(): String? = runCatching {
+    (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java).invoke(null, "debug.vault.selftest.site") as String).ifBlank { null }
+}.getOrNull()
+
+private fun selfTest(): Boolean = runCatching {
+    Class.forName("android.os.SystemProperties").getMethod("get", String::class.java).invoke(null, "debug.vault.selftest") == "1"
+}.getOrDefault(false)
 
 /** Vault as Android's autofill service: logins, a strong new password and 2FA codes, in apps and browsers. */
 @RequiresApi(Build.VERSION_CODES.O)
