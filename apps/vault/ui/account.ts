@@ -29,6 +29,22 @@ export async function signIn(email: string, password: string): Promise<string> {
   return j.session;
 }
 
+/** A new marobotic account (the same one Hourglass and Jukebox use); its session, or the server's reason. */
+export async function register(email: string, password: string): Promise<string> {
+  const r = await call("POST", "/auth/register", undefined, { email, password });
+  const j = (await r.json().catch(() => ({}))) as { session?: string; error?: string };
+  if (r.status >= 500) throw new Offline("marobotic.dev is not answering");
+  if (!r.ok || !j.session) throw new SignInError(j.error || "That account couldn't be created.");
+  return j.session;
+}
+
+/** Mails a link to choose a new password (the same answer for any email). */
+export async function forgot(email: string): Promise<void> {
+  const r = await call("POST", "/auth/forgot", undefined, { email, app: "vault" });
+  if (r.status >= 500) throw new Offline("marobotic.dev is not answering");
+  if (!r.ok) { const j = (await r.json().catch(() => ({}))) as { error?: string }; throw new SignInError(j.error || "That didn't work. Try again in a minute."); }
+}
+
 /** The vault on the server and its version, or null when this account has none yet. */
 export async function fetchVault(session: string): Promise<{ rev: number; file: VaultFile } | null> {
   const r = await call("GET", "/api/vault", session);

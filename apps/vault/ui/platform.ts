@@ -88,6 +88,10 @@ type AndroidBridge = {
   autofillProvider(): string;        // the app filling passwords now ("Vault", "Proton Pass", "")
   passkeyProviderIsVault(): boolean;
   openAutofillSettings(): void;
+  unlockState(): string;             // "unavailable" | "ready" | "saved"
+  unlockClear(): void;
+  unlockSave(id: number, email: string, password: string): void;
+  unlockOpen(id: number): void;
 };
 const android = (globalThis as { VaultAndroid?: AndroidBridge }).VaultAndroid;
 export const hasAutofill = Boolean(android);
@@ -110,3 +114,27 @@ export const autofillState = () => (android ? android.autofillState() : "unsuppo
 export const autofillProvider = () => (android ? android.autofillProvider() : "");
 export const passkeysOnVault = () => (android ? android.passkeyProviderIsVault() : false);
 export const openAutofillSettings = () => android?.openAutofillSettings();
+
+// ------------------------------------------------------------------ Android: unlock with fingerprint / screen lock
+// The account password, sealed by the phone's keystore behind a fingerprint, face or the phone's PIN.
+let asked = 0;
+function nativeAnswer<T>(start: (id: number) => void): Promise<T> {
+  const id = ++asked;
+  return new Promise((done) => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent).detail as T & { id: number };
+      if (d.id !== id) return;
+      removeEventListener("vault-native", on);
+      done(d);
+    };
+    addEventListener("vault-native", on);
+    start(id);
+  });
+}
+export const quickUnlock = {
+  /** "unavailable" (no fingerprint/screen lock, or not a phone), "ready", or "saved". */
+  state: (): string => (android ? android.unlockState() : "unavailable"),
+  clear: () => android?.unlockClear(),
+  save: (email: string, password: string) => nativeAnswer<{ ok: boolean; error: string }>((id) => android!.unlockSave(id, email, password)),
+  open: () => nativeAnswer<{ email?: string; password?: string; error?: string }>((id) => android!.unlockOpen(id)),
+};

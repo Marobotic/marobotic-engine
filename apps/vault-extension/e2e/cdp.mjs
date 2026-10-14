@@ -78,6 +78,15 @@ switch (cmd) {
     s.close(); break;
   }
   case "type": { const s = await session(args[0]); await s.call("Input.insertText", { text: args.slice(1).join(" ") }); s.close(); break; }
+  case "phoneshot": {   // phoneshot <match> <file.png> [js]: at phone size (360x800, like the A07), after running js
+    const s = await session(args[0]);
+    await s.call("Emulation.setDeviceMetricsOverride", { width: 360, height: 800, deviceScaleFactor: 2, mobile: true });
+    if (args[2]) { await s.call("Runtime.evaluate", { expression: args.slice(2).join(" "), awaitPromise: true }); }
+    await new Promise((r) => setTimeout(r, 600));
+    const r = await s.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(args[1], Buffer.from(r.result.data, "base64"));
+    console.log(args[1]); s.close(); break;
+  }
   case "shot": {
     const s = await session(args[0]);
     const r = await s.call("Page.captureScreenshot", { format: "png" });

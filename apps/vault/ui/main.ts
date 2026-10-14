@@ -18,6 +18,8 @@ import * as account from "./account.ts";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
 const app = $("#app");
+/** "this phone" or "this PC", for messages about the copy kept here. */
+const here = platform.isMobile ? "this phone" : "this PC";
 const LOCK_CHOICES = [0, 5, 15, 30, 60, 240, 1440];   // minutes; 0 = never
 
 let vault: Vault | null = null;
@@ -82,61 +84,131 @@ function sync(): Promise<void> {
 function setSyncState(state: "synced" | "offline" | "signed out") {
   const el = document.getElementById("sync");
   if (!el) return;
-  el.textContent = state === "synced" ? "Synced" : state === "offline" ? "Offline - saved on this PC" : "Signed out - saved on this PC";
+  el.textContent = state === "synced" ? "Synced" : state === "offline" ? `Offline - saved on ${here}` : `Signed out - saved on ${here}`;
   el.style.setProperty("--state", state === "synced" ? "var(--teal)" : "var(--orange)");
 }
 
 // ------------------------------------------------------------------ sign in
-function signInScreen(message = "") {
+// Vault's mark, drawn from a grid like Hourglass's: a gold lock with a red keyhole.
+const LOCK = ["..#####..", ".##...##.", ".#.....#.", ".#.....#.", "ooooooooo", "oooxxxooo", "oooxxxooo", "ooooxoooo", "ooooxoooo", "ooooooooo"];
+function pixelLock(cell = 7): string {
+  const rects = LOCK.flatMap((row, y) => [...row].map((ch, x) => (ch === "." ? "" :
+    `<rect x="${x * cell}" y="${y * cell}" width="${cell}" height="${cell}" fill="${ch === "x" ? "var(--accent)" : "var(--gold)"}"/>`))).join("");
+  return `<svg class="pixel" width="${9 * cell}" height="${10 * cell}" viewBox="0 0 ${9 * cell} ${10 * cell}" aria-hidden="true">${rects}</svg>`;
+}
+
+let signedInWith: { email: string; password: string } | null = null;   // only to turn on quick unlock this session
+
+/** Signed out (or locked): sign in, create an account, or get a reset link - the same screen as
+ *  Hourglass and Jukebox. On a phone with quick unlock on, the fingerprint prompt comes up first. */
+function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "signin", tryQuick = true) {
   vault = null;
   session = null;
+  signedInWith = null;
   stopAutoXl();
   platform.setAutofill(null);
   const last = file?.email || localStorage.getItem("vault.email") || "";
+  const quick = mode === "signin" && platform.quickUnlock.state() === "saved";
+  const create = mode === "create", forgot = mode === "forgot";
   app.replaceChildren(h(`
-    <form class="gate">
-      <div class="brand"><span class="logo"></span> Vault</div>
-      <h1>Sign in</h1>
-      <p>Your marobotic account, the same as Hourglass and Jukebox. Your vault is sealed on this device with your password; the server only keeps the sealed copy.</p>
-      <label class="lab" for="em">Email</label><input id="em" class="m-field" type="email" autocomplete="username" required value="${esc(last)}">
-      <label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="current-password" required>
-      <div class="err" id="err">${esc(message)}</div>
-      <button class="m-btn primary" type="submit">Sign in</button>
-    </form>`));
+    <div class="login">
+      ${pixelLock()}
+      <div class="title">Vault</div>
+      <div class="tag">Your passwords, 2FA codes and passkeys, on every device.</div>
+      <form class="card" novalidate>
+        ${forgot ? `<div class="lead">Forgot your password? Enter your email and we'll send you a link to choose a new one.</div>`
+          : `<div class="switch"><button type="button" data-mode="signin" class="${create ? "" : "on"}">Sign in</button><button type="button" data-mode="create" class="${create ? "on" : ""}">Create account</button></div>`}
+        <label class="lab" for="em">Email</label>
+        <input id="em" class="m-field" type="email" autocomplete="username" inputmode="email" autocapitalize="off" value="${esc(last)}">
+        ${forgot ? "" : `<label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="${create ? "new-password" : "current-password"}">`}
+        ${create ? `<label class="lab" for="pw2">Confirm password</label><input id="pw2" class="m-field" type="password" autocomplete="new-password">` : ""}
+        ${!create && !forgot ? `<a href="#" class="forgot" id="toForgot">Forgot password?</a>` : ""}
+        ${forgot ? "" : `<div class="hint">${create ? "At least 8 characters. Your vault is sealed with it on your devices; the server only ever keeps the sealed copy." : "The same account as Hourglass and Jukebox."}</div>`}
+        <div class="notice" id="notice"></div>
+        <div class="err" id="err">${esc(message)}</div>
+        ${quick ? `<button class="m-btn primary" type="button" id="quick">&#xf023; Unlock with fingerprint or screen lock</button>` : ""}
+        <button class="m-btn ${quick ? "" : "primary"}" type="submit">${forgot ? "Send reset link" : create ? "Create account" : "Sign in"}</button>
+      </form>
+      <div class="other">${forgot ? "Remembered it? " : create ? "Already have an account? " : "New here? "}<a href="#" id="flip">${forgot || create ? "Sign in" : "Create an account"}</a></div>
+    </div>`));
   const form = $<HTMLFormElement>("form", app);
-  $(last ? "#pw" : "#em", form).focus();
+  const err = (t: string) => { $("#err").textContent = t; $("#notice").textContent = ""; };
+  app.querySelectorAll<HTMLElement>("[data-mode]").forEach((b) => (b.onclick = () => signInScreen("", b.dataset.mode as "signin" | "create", false)));
+  $("#toForgot")?.addEventListener("click", (e) => { e.preventDefault(); signInScreen("", "forgot", false); });
+  $("#flip").onclick = (e) => { e.preventDefault(); signInScreen("", forgot || create ? "signin" : "create", false); };
+  if (!platform.isMobile) $<HTMLInputElement>(last && !forgot ? "#pw" : "#em").focus();
+
+  const quickUnlock = async () => {
+    const r = await platform.quickUnlock.open();
+    if (!r.email || !r.password) {
+      if (r.error === "changed") err("Your phone's fingerprints changed, so quick unlock was turned off. Sign in with your password to turn it on again.");
+      else if (r.error && r.error !== "cancelled") err(r.error);
+      return;
+    }
+    const b = $<HTMLButtonElement>("#quick");
+    if (b) { b.disabled = true; b.textContent = "Opening…"; }
+    try { await openAccount(r.email, r.password); }
+    catch (e) {
+      if (e instanceof account.SignInError) { platform.quickUnlock.clear(); signInScreen("Your password changed. Sign in with the new one to turn quick unlock on again.", "signin", false); }
+      else { if (b) { b.disabled = false; b.innerHTML = "&#xf023; Unlock with fingerprint or screen lock"; } err((e as Error).message); }
+    }
+  };
+  $("#quick")?.addEventListener("click", () => void quickUnlock());
+  if (quick && tryQuick) void quickUnlock();
+
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const email = $<HTMLInputElement>("#em").value.trim().toLowerCase();
-    const pw = $<HTMLInputElement>("#pw").value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err("Enter a valid email address.");
     const btn = $<HTMLButtonElement>("button[type=submit]", form);
-    btn.disabled = true; btn.textContent = "Signing in…";
+    const label = btn.textContent ?? "";
+    if (forgot) {
+      btn.disabled = true; btn.textContent = "Sending…";
+      try { await account.forgot(email); err(""); $("#notice").textContent = `If ${email} has an account, a reset link is on its way. Open it on any device; it works for one hour. Afterwards your recovery kit opens your vault.`; }
+      catch (e) { err((e as Error).message); }
+      btn.disabled = false; btn.textContent = label;
+      return;
+    }
+    const pw = $<HTMLInputElement>("#pw").value;
+    if (pw.length < 8) return err("The password needs at least 8 characters.");
+    if (create && $<HTMLInputElement>("#pw2").value !== pw) return err("The passwords do not match.");
+    btn.disabled = true; btn.textContent = create ? "Creating account…" : "Signing in…";
     await new Promise((r) => setTimeout(r, 30)); // let the label paint before Argon2 runs
     try {
-      await openAccount(email, pw);
+      await openAccount(email, pw, create);
     } catch (e) {
-      btn.disabled = false; btn.textContent = "Sign in";
-      $("#err").textContent = (e as Error).message;
+      btn.disabled = false; btn.textContent = label;
+      err((e as Error).message);
     }
   };
 }
 
+/** On a phone, once: offer to unlock with the fingerprint or screen lock from now on. */
+async function offerQuickUnlock() {
+  if (!signedInWith || platform.quickUnlock.state() !== "ready" || localStorage.getItem("vault.quickAsked")) return;
+  localStorage.setItem("vault.quickAsked", "1");
+  if (!confirm("Unlock Vault with your fingerprint or screen lock from now on, instead of typing your password?")) return;
+  const r = await platform.quickUnlock.save(signedInWith.email, signedInWith.password);
+  toast(r.ok ? "Quick unlock is on" : r.error === "cancelled" ? "Quick unlock stays off" : `Couldn't turn it on: ${r.error}`);
+}
+
 /** Sign in, then: the server's vault (with this PC's offline changes merged in), this PC's vault
  *  uploaded, or a brand-new vault for an account that has none yet. */
-async function openAccount(email: string, pw: string) {
+async function openAccount(email: string, pw: string, create = false) {
   localStorage.setItem("vault.email", email);
   const localFile = file && file.email === email ? file : null;
+  signedInWith = { email, password: pw };
   try {
-    session = await account.signIn(email, pw);
+    session = create ? await account.register(email, pw) : await account.signIn(email, pw);
   } catch (e) {
     if (e instanceof account.Offline && localFile) {
       vault = unlockOrNull(localFile, pw);
-      if (!vault) throw new Error("That password doesn't open the copy on this PC.");
+      if (!vault) throw new Error(`That password doesn't open the copy on ${here}.`);
       homeScreen();
       setSyncState("offline");
       return;
     }
-    throw e instanceof account.Offline ? new Error(`${e.message}, and there is no copy of this vault on this PC yet.`) : e;
+    throw e instanceof account.Offline ? new Error(`${e.message}, and there is no copy of this vault on ${here} yet.`) : e;
   }
   const remote = await account.fetchVault(session);
   if (remote) {
@@ -240,7 +312,7 @@ function homeScreen() {
   app.replaceChildren(h(`
     <div class="top">
       <div class="brand"><span class="logo"></span> Vault</div>
-      <div class="m-sync sync-line grow" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : "Offline - saved on this PC"}</div>
+      <div class="m-sync sync-line grow" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : `Offline - saved on ${here}`}</div>
       <button class="m-btn subtle compact" id="settings" title="Settings">&#xf013;<span class="lbl"> Settings</span></button>
     </div>
     <div class="bar">
@@ -269,6 +341,7 @@ function homeScreen() {
 /** Each time the vault opens: Android autofill gets its list, and a link Vault was opened with is offered. */
 async function unlocked() {
   await mergeCodes();
+  void offerQuickUnlock();
   refreshAutofill();
   const link = pendingLink ?? (await platform.takeLaunchLink());
   pendingLink = null;
@@ -300,14 +373,14 @@ function settingsModal() {
             <button class="m-btn compact" id="lockNow">Lock now</button>
           </div>
           <div class="set">
-            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use. Closing the window keeps Vault open in the tray; Quit from the tray icon locks it.</span></div>
+            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use.${platform.isMobile ? "" : " Closing the window keeps Vault open in the tray; Quit from the tray icon locks it."}</span></div>
             <select class="m-field" id="lockAfter">${LOCK_CHOICES.map((m) => `<option value="${m}" ${m === lockAfterMin ? "selected" : ""}>${lockLabel(m)}</option>`).join("")}</select>
           </div>
           <div class="set">
             <div><b>Recovery kit</b><span>The only way back into your vault if your account password is reset. Making a new one stops the old one working.</span></div>
             <button class="m-btn compact" id="kit">New kit</button>
           </div>
-          <div class="set">
+          <div class="set" ${platform.isMobile ? "hidden" : ""}>
             <div><b>Browser extension</b><span>Vault for Chrome, Brave and Edge signs in with this same account and syncs on its own (this app doesn't need to be open). It fills logins and 2FA codes, saves new logins and passkeys, and signs in with passkeys; they show up here too.</span></div>
           </div>
           ${platform.isDesktopApp ? `
@@ -324,9 +397,11 @@ function settingsModal() {
             <div><b>Autofill in apps and browsers</b><span id="afState"></span></div>
             <button class="m-btn compact" id="afSet">Choose Vault</button>
           </div>` : ""}
+          ${platform.quickUnlock.state() !== "unavailable" ? `
           <div class="set">
-            <div><b>Vault file on this device</b><span id="path"></span></div>
-          </div>
+            <div><b>Unlock with fingerprint or screen lock</b><span>Your password is sealed by the phone and only opens after your fingerprint, face or the phone's PIN.</span></div>
+            <span class="m-switch ${platform.quickUnlock.state() === "saved" ? "on" : ""}" id="quickSw" role="switch" tabindex="0"></span>
+          </div>` : ""}
         </div>
       </div>
     </div>`).firstElementChild as HTMLElement;
@@ -334,7 +409,14 @@ function settingsModal() {
   const close = () => back.remove();
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
-  void platform.vaultPath().then((p) => ($("#path", back).textContent = p));
+  const qs = $("#quickSw", back);
+  if (qs) qs.onclick = async () => {
+    if (qs.classList.contains("on")) { platform.quickUnlock.clear(); qs.classList.remove("on"); return toast("Quick unlock is off"); }
+    if (!signedInWith) return toast("Lock Vault and sign in with your password once, then turn this on");
+    const r = await platform.quickUnlock.save(signedInWith.email, signedInWith.password);
+    qs.classList.toggle("on", r.ok);
+    toast(r.ok ? "Quick unlock is on" : r.error === "cancelled" ? "Quick unlock stays off" : `Couldn't turn it on: ${r.error}`);
+  };
   const ld = $("#lockdown", back);
   if (ld) {
     // The switch shows what the registry says, not what was last clicked.
@@ -382,7 +464,7 @@ function settingsModal() {
     localStorage.setItem("vault.lockAfterMin", String(lockAfterMin));
     toast(lockAfterMin ? `Vault locks after ${lockLabel(lockAfterMin).replace("After ", "")} without use` : "Vault stays open until you quit or lock it");
   };
-  $("#lockNow", back).onclick = () => { close(); signInScreen(); };
+  $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin", false); };
   $("#kit", back).onclick = async () => {
     if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
     const code = vault!.newRecoveryKit();
@@ -1053,8 +1135,10 @@ if (platform.hasAutofill) { setInterval(() => void takeAndroidSaves(), 2000); ad
 if (platform.isDesktopApp) void platform.setLinkHandler(linksOn).catch(() => {});
 
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
+// Back in the app while it's locked: the fingerprint prompt comes up by itself.
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") $("#quick")?.click(); });
 setInterval(() => {
-  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`);
+  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`, "signin", false);
   else if (vault) tick();
 }, 1000);
 

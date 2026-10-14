@@ -125,8 +125,9 @@ details.more summary:hover { color: var(--fg); }
   #app { padding: 14px 12px 28px; }
   .top { gap: 10px; margin-bottom: 14px; }
   .top #settings .lbl { display: none; }
-  .bar .filter.grow { flex-basis: 100%; }
-  .bar .m-btn { flex: 1; }
+  .bar { flex-wrap: nowrap; }
+  .bar .filter.grow { flex: 1 1 0; min-width: 0; }
+  .bar .m-btn { flex: none; height: 32px; }
   .row3 { grid-template-columns: 1fr 1fr; }
   .code-row, .item.login { gap: 6px 10px; padding: 10px 4px 9px 10px; }
   .code-row .code { font-size: 21px; letter-spacing: 1.5px; }
@@ -142,3 +143,29 @@ details.more summary:hover { color: var(--fg); }
 /* a login's one-time code in its editor */
 .otpnow { font: 700 18px var(--mono); letter-spacing: 2px; }
 .otpbox .otpadd { display: grid; gap: 6px; }
+
+/* signed out: the same screen as Hourglass and Jukebox */
+.login { width: min(380px, 100%); margin: 0 auto; min-height: calc(100vh - 64px); display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 24px 0; }
+.login .pixel { align-self: center; shape-rendering: crispEdges; }
+.login .title { align-self: center; margin-top: 10px; font: 700 26px var(--mono); }
+.login .tag { text-align: center; color: var(--muted); font: 14px/1.35 var(--mono); }
+.login .card { margin-top: 12px; padding: 20px; background: var(--surface); border: 1px solid var(--border); display: grid; gap: 10px; }
+.login .switch { display: flex; padding: 4px; margin-bottom: 6px; background: var(--bg); border: 1px solid var(--border); }
+.login .switch button { flex: 1; height: 32px; border: 0; background: transparent; color: var(--muted); font: 14px var(--mono); cursor: pointer; }
+.login .switch button.on { background: var(--surface2); color: var(--fg); font-weight: 700; }
+.login .lead { font: 13px/1.4 var(--mono); }
+.login .lab { margin-top: 4px; }
+.login .m-field { width: 100%; height: 42px; }
+.login .forgot { justify-self: end; color: var(--muted); font-size: 12px; text-decoration: none; }
+.login .forgot:hover { color: var(--fg); text-decoration: underline; }
+.login .hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.login .notice { color: var(--teal); font-size: 13px; line-height: 1.35; }
+.login .notice:empty, .login .err:empty { display: none; }
+.login .err { color: var(--accent); font-size: 13px; }
+.login .card .m-btn { width: 100%; height: 40px; margin-top: 6px; }
+.login .other { text-align: center; color: var(--muted); font-size: 14px; }
+.login .other a { color: var(--accent); font-weight: 700; text-decoration: none; }
+
+/* an open dialog: the page behind it stays put */
+body:has(.backdrop) { overflow: hidden; }
+.backdrop { overscroll-behavior: contain; }
