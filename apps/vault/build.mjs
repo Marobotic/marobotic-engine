@@ -18,6 +18,8 @@ await build({
   minify: true,
   outfile: here("./dist/main.js"),
   logLevel: "warning",
+  // The shared packages straight from packages/: some shells can't follow node_modules' junctions.
+  alias: Object.fromEntries(["crypto", "otp", "importers"].map((p) => [`@marobotic/${p}`, here(`../../packages/${p}/src/index.ts`)])),
 });
 for (const f of ["index.html", "vault.css"]) cpSync(here(`./ui/${f}`), here(`./dist/${f}`));
 for (const f of ["marochy.css", "engine.css", "fonts"]) cpSync(here(`../../packages/ui/${f}`), here(`./dist/${f}`), { recursive: true });

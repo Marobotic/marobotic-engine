@@ -577,7 +577,7 @@ function renderList() {
   if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.email ?? ""} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
   const ps = passkeys().sort((a, b) => (a.data.rpName || a.data.rpId).localeCompare(b.data.rpName || b.data.rpId));
   if (filter === "login") for (const i of ps) if (matchesQuery(`${i.data.rpName ?? ""} ${i.data.rpId} ${i.data.username}`)) rows.push(passkeyRow(i));
-  const ff = new Set(ffxivEntries(ts.map((i) => i.data.otp)));
+  const ff = new Set(platform.isDesktopApp ? ffxivEntries(ts.map((i) => i.data.otp)) : []);   // sending to XIVLauncher is desktop only
   if (filter === "totp") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) rows.push(codeRow(i, ff.has(i.data.otp)));
 
   if (!rows.length) {
@@ -968,7 +968,7 @@ function loginEditor(existing: LoginRow | null) {
 // ------------------------------------------------------------------ XIVLauncher
 /** Send one account's code now. Auto-send (maybe for another account) pauses meanwhile so the two never race. */
 async function sendOnce(entry: OtpEntry, who: string) {
-  if (!platform.inApp) return toast("Sending to XIVLauncher works in the Vault app, not in a browser");
+  if (!platform.isDesktopApp) return toast("Sending to XIVLauncher works in the Windows app");
   stopAutoXl();
   toast(`Waiting for XIVLauncher's OTP box (${who})…`);
   const r = await sendWhenAsked(entry, { untilMs: 60_000, send: platform.xlSend });
@@ -978,13 +978,13 @@ async function sendOnce(entry: OtpEntry, who: string) {
 
 /** Auto-send: whenever XIVLauncher asks, it gets the code of the one account chosen for it. */
 function startAutoXl() {
-  if (xlRun || !platform.inApp || !vault) return;
+  if (xlRun || !platform.isDesktopApp || !vault) return;
   const run = (xlRun = new AbortController());
   (async () => {
     while (!run.signal.aborted && vault) {
-      const item = vault.get(autoXlId);
-      if (!item || item.data.type !== "totp") break;
-      const who = item.data.otp.account || nameOf(item as TotpRow);
+      const item = otps().find((t) => t.id === autoXlId);   // a login's own code has the login's id
+      if (!item) break;
+      const who = item.data.otp.account || nameOf(item);
       const r = await sendWhenAsked(item.data.otp, { untilMs: 60 * 60_000, everyMs: 1500, send: platform.xlSend, signal: run.signal });
       if (r.sent) { toast(`FFXIV code sent to XIVLauncher · ${who}`); await new Promise((ok) => setTimeout(ok, 45_000)); }
     }
