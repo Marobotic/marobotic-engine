@@ -988,6 +988,7 @@ function startAutoXl() {
       const r = await sendWhenAsked(item.data.otp, { untilMs: 60 * 60_000, everyMs: 1500, send: platform.xlSend, signal: run.signal });
       if (r.sent) { toast(`FFXIV code sent to XIVLauncher · ${who}`); await new Promise((ok) => setTimeout(ok, 45_000)); }
     }
+    if (xlRun === run) xlRun = null;   // ended by itself: the next start mustn't think it's still running
   })();
 }
 function stopAutoXl() { xlRun?.abort(); xlRun = null; }
