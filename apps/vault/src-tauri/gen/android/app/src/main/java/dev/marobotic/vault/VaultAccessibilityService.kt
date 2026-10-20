@@ -172,7 +172,26 @@ class VaultAccessibilityService : AccessibilityService() {
                     (v == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS || v == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)
             }
 
+            /**
+             * A box you write messages in (a chat, a comment, an email): never a sign-in field. Chat
+             * composers are multi-line or say they take messages, sign-in and code boxes never are.
+             * Without this, a friend's message just above the box ("send me the code") read as the
+             * box's label and the 2FA codes came up while chatting.
+             */
+            fun isMessageBox(n: AccessibilityNodeInfo): Boolean {
+                if (n.isMultiLine) return true
+                val t = n.inputType
+                if ((t and InputType.TYPE_MASK_CLASS) != InputType.TYPE_CLASS_TEXT) return false
+                val v = t and InputType.TYPE_MASK_VARIATION
+                return (t and InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (t and InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE) != 0 ||
+                    v == InputType.TYPE_TEXT_VARIATION_SHORT_MESSAGE || v == InputType.TYPE_TEXT_VARIATION_LONG_MESSAGE
+            }
+
+            /** Text shown before a field counts as its label only when it reads like one: short, one line. */
+            private fun labelLike(s: String) = s.length <= 32 && !s.contains('\n')
+
             fun of(focused: AccessibilityNodeInfo): Form? {
+                if (isMessageBox(focused)) return null
                 // Only the part of the screen around the field (each node is a call into the app, and a
                 // whole Discord screen is hundreds): a few levels up holds the sign-in form.
                 var top = focused
@@ -184,7 +203,7 @@ class VaultAccessibilityService : AccessibilityService() {
                 fun walk(n: AccessibilityNodeInfo, depth: Int) {
                     if (depth > 14 || edits.size > 8 || ++seen > 160) return
                     if (n.isEditable && n.isVisibleToUser) { edits.add(n); texts[n] = lastText }
-                    else n.text?.toString()?.takeIf { it.isNotBlank() && it.length < 60 }?.let { lastText = it }
+                    else n.text?.toString()?.takeIf { it.isNotBlank() }?.let { lastText = if (labelLike(it)) it else "" }
                     for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, depth + 1) }
                 }
                 walk(top, 0)

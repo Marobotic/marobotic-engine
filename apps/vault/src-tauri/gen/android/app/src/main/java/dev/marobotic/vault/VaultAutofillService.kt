@@ -75,6 +75,9 @@ class Fields(structure: AssistStructure, ownPackage: String) {
         val words = listOfNotNull(n.idEntry, n.hint?.toString(), html["name"], html["id"], html["placeholder"], html["aria-label"], ac).joinToString(" ").lowercase()
         val cls = n.inputType and InputType.TYPE_MASK_CLASS
         val variation = n.inputType and InputType.TYPE_MASK_VARIATION
+        // A message box (chat, comment, email body) is never a sign-in or code field.
+        if (cls == InputType.TYPE_CLASS_TEXT && ((n.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0 || (n.inputType and InputType.TYPE_TEXT_FLAG_IME_MULTI_LINE) != 0 ||
+                variation == InputType.TYPE_TEXT_VARIATION_SHORT_MESSAGE || variation == InputType.TYPE_TEXT_VARIATION_LONG_MESSAGE)) return
         val value = n.autofillValue?.takeIf { it.isText }?.textValue?.toString() ?: ""
         val isPassword = hints.any { "password" in it } || htmlType == "password" ||
             (cls == InputType.TYPE_CLASS_TEXT && variation in setOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)) ||
