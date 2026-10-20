@@ -12,6 +12,8 @@ jobs:
   ipa:
     runs-on: macos-15
     timeout-minutes: 40
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,5 +41,11 @@ jobs:
           fi
           echo "APP=$APP"
           mkdir -p Payload && cp -R "$APP" Payload/ && zip -qr Vault.ipa Payload
-      - uses: actions/upload-artifact@v4
-        with: { name: Vault-ipa, path: apps/vault/Vault.ipa }
+      # Onto the latest-build release (release assets don't count against the account's
+      # Actions storage). `mdeploy ios update Marobotic/marobotic-engine --tag latest-build`.
+      - name: Publish to the latest-build release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest-build >/dev/null 2>&1 || gh release create latest-build --prerelease --title "Latest build" --notes "The newest Vault iPhone build from main, replaced on every push."
+          gh release upload latest-build apps/vault/Vault.ipa --clobber
