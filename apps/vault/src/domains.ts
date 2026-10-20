@@ -104,8 +104,21 @@ export function codesFor<C extends { id: string; data: { otp: OtpEntry } }, L ex
     if (iss === name || iss === word(key) || (name.length > 3 && iss.includes(name))) add(c);
     else if (siteKey(c.data.otp.issuer) === key && c.data.otp.issuer.includes(".")) add(c);
   }
+  // An account at the site's own domain ("AI-in-Chrome Admin: mi@marobotic.dev" on marobotic.dev). Never
+  // a mailbox provider's: a code for you@gmail.com is GitHub's or anyone's, not Google's.
+  for (const c of codes) {
+    const at = c.data.otp.account.split("@");
+    const mail = at.length === 2 ? siteKey(at[1]!) : "";
+    if (mail && mail === key && !MAILBOXES.has(registrableDomain(at[1]!))) add(c);
+  }
   return out;
 }
+
+const MAILBOXES = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com", "icloud.com", "me.com",
+  "mac.com", "proton.me", "protonmail.com", "pm.me", "aol.com", "gmx.com", "gmx.de", "mail.com", "yandex.com", "yandex.ru", "zoho.com",
+  "tutanota.com", "tuta.io", "fastmail.com", "hey.com", "qq.com", "163.com",
+]);
 
 /** Words an Android app's package name gives for matching ("com.github.android" -> ["github"]). */
 export function packageWords(pkg: string): string[] {

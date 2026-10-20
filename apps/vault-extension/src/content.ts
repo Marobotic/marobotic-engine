@@ -9,6 +9,8 @@ import { send, type CodeHit, type LoginHit, type Matches, type Offer, type Passk
 type Kind = "username" | "password" | "newPassword" | "otp";
 
 const OTP_RE = /one.?time|\botp\b|totp|2fa|mfa|two.?factor|two.?step|verification.?code|verify|security.?code|auth\w*.?code|passcode|\bcode\b|\btoken\b|\bpin\b/i;
+// Unmistakably a 2FA code, enough to beat type=password ("One-Time Password", Square Enix's otppw).
+const OTP_STRONG_RE = /one.?time|\botp|otp\b|totp|2fa|mfa|two.?factor|two.?step|authenticat\w*.?code|verification.?code|security.?code/i;
 const NOT_OTP_RE = /zip|postal|promo|coupon|discount|country|area.?code|captcha|gift|referral|invite|voucher|search/i;
 const USER_RE = /user|e-?mail|login|account|identifier|\bident|member|\bid\b|phone|mobile/i;
 const SIGNUP_RE = /sign.?up|register|registration|create.?account|join|new.?pass|confirm|change.?pass|reset|repeat|retype|again/i;
@@ -21,6 +23,13 @@ const visible = (el: HTMLElement) => {
   return s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0.05;
 };
 const labelOf = (el: HTMLInputElement) => [...(el.labels ?? [])].map((l) => l.textContent ?? "").join(" ");
+/** Text printed next to a field with no <label> ("One-Time Password" in a cell before it). */
+function nearText(el: HTMLInputElement): string {
+  const by = el.getAttribute("aria-labelledby")?.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ") ?? "";
+  if (by.trim() || el.labels?.length) return by;
+  const t = `${el.previousElementSibling?.textContent ?? ""} ${el.parentElement?.previousElementSibling?.textContent ?? ""}`.trim();
+  return t.length <= 60 ? t : "";
+}
 const attrs = (el: HTMLInputElement) => [el.name, el.id, el.placeholder, el.getAttribute("aria-label"), el.getAttribute("autocomplete"), el.getAttribute("data-testid"), labelOf(el)].join(" ");
 const inputs = (scope: ParentNode) => [...scope.querySelectorAll<HTMLInputElement>("input")].filter((i) => !i.disabled && visible(i));
 const scopeOf = (el: Element) => (el as HTMLInputElement).form ?? el.closest("form") ?? document;
@@ -46,11 +55,12 @@ function kindOf(el: EventTarget | null): Kind | null {
   if (!(el instanceof HTMLInputElement) || el.disabled || el.readOnly) return null;
   const type = el.type.toLowerCase();
   const ac = (el.getAttribute("autocomplete") ?? "").toLowerCase();
+  if (type === "password" && (ac.includes("one-time-code") || OTP_STRONG_RE.test(`${attrs(el)} ${nearText(el)}`))) return "otp";
   if (type === "password") return ac.includes("current-password") ? "password" : ac.includes("new-password") || isSignup(el) ? "newPassword" : "password";
   if (!["text", "email", "tel", "number", ""].includes(type)) return null;
   const a = attrs(el);
   if (ac.includes("one-time-code") || digitBoxes(el).length) return "otp";
-  if (OTP_RE.test(a) && !NOT_OTP_RE.test(a) && !/e-?mail|user/i.test(a)) return "otp";
+  if ((OTP_RE.test(a) || OTP_STRONG_RE.test(nearText(el))) && !NOT_OTP_RE.test(a) && !/e-?mail|user/i.test(a)) return "otp";
   if (ac.includes("username") || ac.startsWith("email") || type === "email" || USER_RE.test(a)) return "username";
   // A plain text box right before a password box is the name for it.
   const all = inputs(scopeOf(el));
@@ -368,6 +378,13 @@ chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>)
     else fillLogin(m.username ?? "", m.password ?? "", focused && kindOf(focused) ? focused : undefined, m.email ?? "");
   }
   if (m.t === "fillBest") void fillBest();
+  // Unlocked (or locked) in the toolbar: the list under the field changes at once, no reload.
+  if (m.t === "unlocked" || m.t === "locked") {
+    cache = null;
+    quietUntil = 0;
+    const f = boxFor ?? (document.activeElement instanceof HTMLInputElement ? document.activeElement : null);
+    if (f && kindOf(f)) void offerFor(f, "click");
+  }
 });
 
 async function fillBest() {

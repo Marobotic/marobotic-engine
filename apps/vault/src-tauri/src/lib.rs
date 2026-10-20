@@ -66,49 +66,185 @@ fn xl_send(code: String, host: String) -> bool {
     status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200")
 }
 
-/// Windows: every QR code on every monitor. Vault's own window steps aside for the capture, so a
-/// QR code behind it is read too.
+/// Windows: you pick the QR code on screen, like a snipping tool. Vault steps aside, every monitor is
+/// captured, and each gets a full-screen window showing its picture dimmed (snip.html); you drag a box
+/// around the QR code there. The text of the code(s) in that box comes back, or None when cancelled.
+#[cfg(windows)]
+#[derive(Default)]
+struct Snip {
+    shots: std::sync::Mutex<Vec<xcap::image::RgbaImage>>,
+    reply: std::sync::Mutex<Option<std::sync::mpsc::Sender<Option<Vec<String>>>>>,
+}
+
+#[cfg(windows)]
+const SNIP: &str = "snip-";
+/// The main window's additionalBrowserArgs in tauri.conf.json, word for word.
+#[cfg(windows)]
+const MAIN_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
+
+#[cfg(windows)]
+fn snip_index(window: &tauri::WebviewWindow) -> Option<usize> {
+    window.label().strip_prefix(SNIP)?.parse().ok()
+}
+
 #[cfg(windows)]
 #[tauri::command]
-async fn scan_screen(window: tauri::WebviewWindow) -> Result<Vec<String>, String> {
+async fn scan_screen(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<Option<Vec<String>>, String> {
+    use tauri::{PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
     let _ = window.hide();
     let shots = tauri::async_runtime::spawn_blocking(|| {
         std::thread::sleep(Duration::from_millis(350)); // let the window finish disappearing
-        xcap::Monitor::all().map(|ms| ms.iter().filter_map(|m| m.capture_image().ok()).collect::<Vec<_>>())
+        xcap::Monitor::all().map(|ms| {
+            ms.iter()
+                .filter_map(|m| Some((m.x().ok()?, m.y().ok()?, m.capture_image().ok()?)))
+                .collect::<Vec<_>>()
+        })
     })
     .await
     .map_err(|e| e.to_string())?;
+    let back = |w: &tauri::WebviewWindow| {
+        let _ = w.show();
+        let _ = w.set_focus();
+    };
+    let shots = match shots {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => {
+            back(&window);
+            return Err("no screen could be captured".into());
+        }
+        Err(e) => {
+            back(&window);
+            return Err(e.to_string());
+        }
+    };
+    let snip = app.state::<Snip>();
+    let (tx, rx) = std::sync::mpsc::channel();
+    *snip.reply.lock().unwrap() = Some(tx);
+    let places: Vec<_> = shots.iter().map(|(x, y, img)| (*x, *y, img.width(), img.height())).collect();
+    *snip.shots.lock().unwrap() = shots.into_iter().map(|(_, _, img)| img).collect();
+    for (i, (x, y, w, h)) in places.into_iter().enumerate() {
+        // Same browser arguments as the main window: WebView2 refuses a second set in one profile.
+        let built = WebviewWindowBuilder::new(&app, format!("{SNIP}{i}"), WebviewUrl::App("snip.html".into()))
+            .title("Vault - pick the QR code")
+            .decorations(false)
+            .resizable(false)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .additional_browser_args(MAIN_BROWSER_ARGS)
+            .build();
+        match built {
+            Ok(win) => {
+                let _ = win.set_position(PhysicalPosition::new(x, y));
+                let _ = win.set_size(PhysicalSize::new(w.max(1), h.max(1)));
+            }
+            Err(e) => {
+                close_snips(&app);
+                back(&window);
+                return Err(e.to_string());
+            }
+        }
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten()).await.map_err(|e| e.to_string())?;
+    close_snips(&app);
+    back(&window);
+    Ok(picked)
+}
+
+#[cfg(windows)]
+fn close_snips(app: &tauri::AppHandle) {
+    let snip = app.state::<Snip>();
+    snip.shots.lock().unwrap().clear();
+    snip.reply.lock().unwrap().take();
+    for (label, w) in app.webview_windows() {
+        if label.starts_with(SNIP) {
+            let _ = w.destroy();
+        }
+    }
+}
+
+/// The picture of the monitor a snip window covers: width and height (u32, little endian), then RGBA.
+#[cfg(windows)]
+#[tauri::command]
+fn snip_shot(window: tauri::WebviewWindow, snip: tauri::State<Snip>) -> Result<tauri::ipc::Response, String> {
+    let shots = snip.shots.lock().unwrap();
+    let img = snip_index(&window).and_then(|i| shots.get(i)).ok_or("no picture for this window")?;
+    let mut out = Vec::with_capacity(8 + img.as_raw().len());
+    out.extend_from_slice(&img.width().to_le_bytes());
+    out.extend_from_slice(&img.height().to_le_bytes());
+    out.extend_from_slice(img.as_raw());
+    Ok(tauri::ipc::Response::new(out))
+}
+
+/// Shown once its picture is drawn, so the screen never flashes blank.
+#[cfg(windows)]
+#[tauri::command]
+fn snip_show(window: tauri::WebviewWindow) {
     let _ = window.show();
     let _ = window.set_focus();
-    let shots = shots.map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut found = Vec::new();
-        for img in shots {
-            let (w, h) = (img.width() as usize, img.height() as usize);
-            let px = img.as_raw();
-            let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(w, h, |x, y| {
-                let i = (y * w + x) * 4;
-                ((px[i] as u32 * 77 + px[i + 1] as u32 * 150 + px[i + 2] as u32 * 29) >> 8) as u8
-            });
-            for grid in prepared.detect_grids() {
-                if let Ok((_, text)) = grid.decode() {
-                    if !found.contains(&text) {
-                        found.push(text);
-                    }
+}
+
+/// A second opinion on the picked box when the page's reader (jsQR) found nothing: rqrr, at the
+/// size it is and blown up 2x and 3x (small QR codes on a dense screen).
+#[cfg(windows)]
+#[tauri::command]
+fn snip_decode(window: tauri::WebviewWindow, snip: tauri::State<Snip>, x: u32, y: u32, w: u32, h: u32) -> Vec<String> {
+    let shots = snip.shots.lock().unwrap();
+    let Some(img) = snip_index(&window).and_then(|i| shots.get(i)) else { return Vec::new() };
+    let (x, y) = (x.min(img.width().saturating_sub(1)), y.min(img.height().saturating_sub(1)));
+    let (w, h) = (w.min(img.width() - x).max(1), h.min(img.height() - y).max(1));
+    let px = img.as_raw();
+    let stride = img.width() as usize;
+    let mut found = Vec::new();
+    for scale in [1usize, 2, 3] {
+        let (sw, sh) = (w as usize * scale, h as usize * scale);
+        let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(sw, sh, |cx, cy| {
+            let i = ((y as usize + cy / scale) * stride + x as usize + cx / scale) * 4;
+            ((px[i] as u32 * 77 + px[i + 1] as u32 * 150 + px[i + 2] as u32 * 29) >> 8) as u8
+        });
+        for grid in prepared.detect_grids() {
+            if let Ok((_, text)) = grid.decode() {
+                if !found.contains(&text) {
+                    found.push(text);
                 }
             }
         }
-        found
-    })
-    .await
-    .map_err(|e| e.to_string())
+        if !found.is_empty() {
+            break;
+        }
+    }
+    found
+}
+
+/// The box was picked (the codes in it), or the snip was cancelled (None).
+#[cfg(windows)]
+#[tauri::command]
+fn snip_done(snip: tauri::State<Snip>, texts: Option<Vec<String>>) {
+    if let Some(tx) = snip.reply.lock().unwrap().take() {
+        let _ = tx.send(texts);
+    }
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
-fn scan_screen() -> Vec<String> {
+fn scan_screen() -> Option<Vec<String>> {
+    None
+}
+#[cfg(not(windows))]
+#[tauri::command]
+fn snip_shot() {}
+#[cfg(not(windows))]
+#[tauri::command]
+fn snip_show() {}
+#[cfg(not(windows))]
+#[tauri::command]
+fn snip_decode() -> Vec<String> {
     Vec::new()
 }
+#[cfg(not(windows))]
+#[tauri::command]
+fn snip_done() {}
 
 /// Windows: otpauth:// links (a site's "add to authenticator app" button) open Vault. Per user, no admin.
 #[cfg(windows)]
@@ -275,6 +411,8 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().manage(LaunchLink(std::sync::Mutex::new(link_in(&std::env::args().collect::<Vec<_>>()))));
+    #[cfg(windows)]
+    let builder = builder.manage(Snip::default());
     // Starting Vault again (Start menu, shortcut, an otpauth:// link) shows the one already in the tray.
     #[cfg(desktop)]
     let builder = builder
@@ -287,13 +425,22 @@ pub fn run() {
         .setup(|app| Ok(tray(app)?))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            // A snip window closed some other way (Alt+F4): the same as Esc.
+            #[cfg(windows)]
+            if let tauri::WindowEvent::Destroyed = event {
+                if window.label().starts_with(SNIP) {
+                    snip_done(window.state::<Snip>(), None);
+                }
             }
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state
+            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");

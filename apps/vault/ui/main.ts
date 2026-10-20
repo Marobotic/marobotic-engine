@@ -908,7 +908,7 @@ function loginEditor(existing: LoginRow | null) {
     otpBox.replaceChildren(h(`<div class="otpadd"><input class="m-field key" id="otpKey" placeholder="Setup key (GHBE AHFH ...) or otpauth:// link" autocomplete="off" autocapitalize="characters" spellcheck="false"><div class="keystate" id="otpState"></div>
       ${codes.length ? `<select class="m-field" id="otpPick"><option value="">or use a saved 2FA code...</option>${codes.map((c) => `<option value="${c.id}">${esc(`${nameOf(c)} · ${c.data.otp.account}`)}</option>`).join("")}</select>` : ""}</div>`));
     const key = $<HTMLInputElement>("#otpKey", otpBox);
-    key.oninput = () => {
+    key.oninput = (ev) => {
       const v = key.value.trim();
       const k = /^otpauth/i.test(v) ? { ok: true, message: "A 2FA link ✓" } : checkKey(v);
       $("#otpState", otpBox).textContent = k.message;
@@ -1003,15 +1003,15 @@ function addCodeModal() {
         <header>Import a 2FA code <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
         <div class="content">
           <div class="scan">
-            ${platform.isDesktopApp ? `<button class="m-btn primary" type="button" id="screen">&#xf108; Scan the screen</button>` : ""}
+            ${platform.isDesktopApp ? `<button class="m-btn primary" type="button" id="screen">&#xf125; Pick the QR code on screen</button>` : ""}
             ${platform.isMobile ? `<button class="m-btn primary" type="button" id="camera">&#xf030; Scan with the camera</button>` : ""}
             <button class="m-btn" type="button" id="pick">&#xf03e; From an image</button>
           </div>
-          <div class="faint hint">${platform.isDesktopApp ? "Open the site's QR code, then Scan the screen: Vault steps aside for a moment and reads every QR code on your monitors. A screenshot works too (choose it, or paste it here with Ctrl+V)." : platform.isMobile ? "Point the camera at the QR code on the other screen, or choose a screenshot of it." : "Choose a screenshot of the QR code, or paste one here."}</div>
+          <div class="faint hint">${platform.isDesktopApp ? "Open the site's QR code, then Pick: Vault steps aside and you drag a box around the code (Esc cancels). A screenshot works too (choose it, or paste it here with Ctrl+V)." : platform.isMobile ? "Point the camera at the QR code on the other screen, or choose a screenshot of it." : "Choose a screenshot of the QR code, or paste one here."}</div>
           <input type="file" id="files" accept="image/*" multiple hidden>
-          <div class="m-section">or type the setup key</div>
-          <label class="lab" for="key">Setup key</label>
-          <input class="m-field key" id="key" placeholder="e.g. GHBE AHFH ADJA 7KQ2 …" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <div class="m-section">or paste the setup key</div>
+          <label class="lab" for="key">Setup key <span class="faint">("copy code for manual entry" on the site)</span></label>
+          <input class="m-field key" id="key" placeholder="e.g. GHBE AHFH ADJA 7KQ2 … or an otpauth:// link" autocomplete="off" autocapitalize="characters" spellcheck="false">
           <div class="keystate" id="keystate"></div>
           <div class="row2">
             <div><label class="lab" for="iss">Service</label><input class="m-field" id="iss" placeholder="e.g. GitHub"></div>
@@ -1037,7 +1037,16 @@ function addCodeModal() {
   document.body.append(back);
   const onPaste = async (e: ClipboardEvent) => {
     const img = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith("image/"));
-    if (!img) return;
+    if (!img) {
+      // Ctrl+V with no field picked: a link imports, a setup key goes in its box.
+      const text = e.clipboardData?.getData("text")?.trim() ?? "";
+      if (!text || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      if (/^otpauth(-migration)?:\/\//i.test(text)) return void fromTexts([text]);
+      key.value = text;
+      key.dispatchEvent(new Event("input"));
+      return;
+    }
     e.preventDefault();
     const t = await readQr(img);
     t ? await fromTexts([t]) : report(["The pasted image has no readable QR code."]);
@@ -1055,10 +1064,11 @@ function addCodeModal() {
   document.addEventListener("paste", onPaste);
 
   $("#screen", back)?.addEventListener("click", async () => {
-    report(["Looking at your screen…"]);
+    report(["Drag a box around the QR code (Esc cancels)…"]);
     try {
       const texts = await platform.scanScreen();
-      if (!texts.length) return report(["No QR code found on screen. Make sure it's fully visible (not covered or scrolled away) and try again."]);
+      if (!texts) return report([]);
+      if (!texts.length) return report(["No QR code found there. Try again around the whole code, or paste its setup key below."]);
       await fromTexts(texts);
     } catch (e) { report([`Couldn't read the screen: ${String((e as Error)?.message ?? e)}`]); }
   });
@@ -1074,8 +1084,11 @@ function addCodeModal() {
   };
 
   const key = $<HTMLInputElement>("#key", back);
-  key.oninput = () => {
+  key.oninput = (ev) => {
+    if (/^otpauth(-migration)?:\/\//i.test(key.value.trim())) { const link = key.value.trim(); key.value = ""; return void fromTexts([link]); }
     const k = checkKey(key.value), st = $("#keystate", back);
+    // A pasted key: name it next (the site's name, e.g. DigitalOcean).
+    if (k.ok && !$<HTMLInputElement>("#iss", back).value && (ev as InputEvent).inputType === "insertFromPaste") $<HTMLInputElement>("#iss", back).focus();
     st.textContent = k.message;
     st.className = `keystate ${k.ok ? "ok" : k.message ? "bad" : ""}`;
   };
@@ -1162,7 +1175,7 @@ function importModal() {
           <input type="file" id="csv" accept=".csv,text/csv" hidden>
           <div class="drop" id="pick">&#xf029; 2FA codes from QR images<br><span class="faint">Google Authenticator's "Transfer accounts" QR codes: one screenshot per code</span></div>
           <input type="file" id="files" accept="image/*" multiple hidden>
-          ${platform.isDesktopApp ? `<button class="m-btn" type="button" id="screen">&#xf108; Scan the screen for transfer QR codes</button>` : ""}
+          ${platform.isDesktopApp ? `<button class="m-btn" type="button" id="screen">&#xf125; Pick transfer QR codes on screen</button>` : ""}
           ${platform.isMobile ? `<button class="m-btn" type="button" id="camera">&#xf030; Scan a transfer QR code with the camera</button>` : ""}
           <label class="lab">or paste 2FA links (otpauth:// or otpauth-migration://), one per line</label>
           <textarea id="text" placeholder="otpauth://totp/GitHub:you?secret=...&#10;otpauth-migration://offline?data=..."></textarea>
@@ -1194,7 +1207,7 @@ function importModal() {
   $("#screen", back)?.addEventListener("click", async () => {
     report(["Looking at your screen…"]);
     const texts = await platform.scanScreen().catch(() => [] as string[]);
-    texts.length ? await fromTexts(texts) : report(["No QR code found on screen."]);
+    if (texts) texts.length ? await fromTexts(texts) : report(["No QR code found there."]);
   });
   $("#camera", back)?.addEventListener("click", () => cameraScan((t) => void fromTexts([t])));
 

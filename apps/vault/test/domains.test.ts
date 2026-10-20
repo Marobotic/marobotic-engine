@@ -41,6 +41,14 @@ test("logins and codes for a page: the exact host first, linked codes first", ()
   assert.deepEqual(codesFor("https://example.com", codes, logins), []);
 });
 
+test("a code whose account is at the site's own domain belongs there, a mailbox provider's never", () => {
+  const C = (id: string, issuer: string, account: string) => ({ id, data: { otp: normalizeEntry({ issuer, account, secret: "JBSWY3DPEHPK3PXP" }) } });
+  const codes = [C("admin", "AI-in-Chrome Admin", "mi@marobotic.dev"), C("gh", "GitHub", "me@gmail.com")];
+  assert.deepEqual(codesFor("https://marobotic.dev/aicc/admin/", codes, []).map((c) => c.id), ["admin"]);
+  assert.deepEqual(codesFor("https://marobotic.dev.evil.com/aicc/admin/", codes, []), []);
+  assert.deepEqual(codesFor("https://accounts.google.com/", codes, []), []);
+});
+
 test("app package names give matching words", () => {
   assert.deepEqual(packageWords("com.github.android"), ["github"]);
   assert.deepEqual(packageWords("com.square_enix.android_googleplay.FFXIVApp"), ["squareenix", "androidgoogleplay", "ffxivapp"]);

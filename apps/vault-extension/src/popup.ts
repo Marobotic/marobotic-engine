@@ -330,12 +330,13 @@ async function settingsScreen() {
   const sw = (key: keyof Settings, title: string, sub: string) =>
     `<div class="set"><div><b>${title}</b><span>${sub}</span></div><span class="sw ${s[key] ? "on" : ""}" data-key="${key}" role="switch" tabindex="0"></span></div>`;
   const { sites } = await send<{ sites: string[] }>({ t: "never" });
-  const locks: [number, string][] = [[0, "Browser closes"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [240, "4 hours"]];
+  const locks: [number, string][] = [[0, "Never"], [5, "5 min"], [15, "15 min"], [60, "1 hour"], [240, "4 hours"]];
   app.replaceChildren(
     h(`<div class="bar"><button class="icon" id="back" title="Back">&#xf060;</button><span class="title">Settings</span></div>`),
     h(`<div class="scroll">
       <div class="group">Account</div>
       <div class="set"><div><b>${esc(st.email ?? "")}</b><span>${st.synced === "synced" ? "Synced with marobotic.dev, on its own: the Vault app doesn't need to be open." : st.synced === "signedOut" ? "Signed out of the server: lock and sign in again to sync." : "Offline: changes sync when you're back online."}</span></div><button id="sync">&#xf021; Sync</button></div>
+      ${sw("stayUnlocked", "Stay unlocked", "Vault opens by itself when the browser starts again, no password. Lock (below) still locks it until you type the password.")}
       <div class="set"><div><b>Lock automatically</b><span>After this long without using Vault in this browser.</span></div>
         <select id="lockAfter">${locks.map(([v, l]) => `<option value="${v}" ${s.lockAfter === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="set"><div><b>Lock or sign out</b><span>Signing out also removes the sealed copy from this browser.</span></div><button id="lockNow">Lock</button><button class="danger" id="out">Sign out</button></div>

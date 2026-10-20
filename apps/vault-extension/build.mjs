@@ -23,6 +23,8 @@ await build({
   outdir: dist,
   logLevel: "warning",
   plugins: e2e ? [mockAccount] : [],
+  // The shared packages straight from packages/: some shells can't follow node_modules' junctions.
+  alias: Object.fromEntries(["crypto", "otp", "importers"].map((p) => [`@marobotic/${p}`, here(`../../packages/${p}/src/index.ts`)])),
 });
 cpSync(here("./static/"), dist, { recursive: true });
 cpSync(here("../../packages/ui/fonts"), `${dist}fonts`, { recursive: true });

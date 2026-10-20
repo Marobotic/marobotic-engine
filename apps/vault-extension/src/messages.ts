@@ -12,9 +12,10 @@ export type Settings = {
   offerSave: boolean;      // "Save this login?" after signing in
   passkeys: boolean;       // make and use passkeys in Vault
   takeover: boolean;       // the browser's own password saving is off
-  lockAfter: number;       // minutes without use; 0 = when the browser closes
+  lockAfter: number;       // minutes without use; 0 = never by itself
+  stayUnlocked: boolean;   // open again by itself after the browser restarts (no password)
 };
-export const DEFAULTS: Settings = { suggest: true, suggestCodes: true, suggestPasswords: true, offerSave: true, passkeys: true, takeover: true, lockAfter: 0 };
+export const DEFAULTS: Settings = { suggest: true, suggestCodes: true, suggestPasswords: true, offerSave: true, passkeys: true, takeover: true, lockAfter: 0, stayUnlocked: true };
 
 /** One entry in the popup's lists. */
 export type Summary = {

@@ -4,8 +4,9 @@
 // syncs with the server by itself; the extension doesn't need the app to be running.
 //
 // The vault key lives in memory and in session storage (memory only, gone when the browser closes, so
-// the worker can be restarted without asking again). The sealed copy is kept in local storage so the
-// extension still opens offline. Nothing readable is ever written to disk.
+// the worker can be restarted without asking again). With "Stay unlocked" (the default) it is also kept
+// across browser restarts, sealed with a key the browser holds non-extractable in IndexedDB; Lock
+// forgets it. The sealed copy is kept in local storage so the extension still opens offline.
 import { init, fromBase64, toBase64 } from "@marobotic/crypto";
 import { totp, normalizeEntry, base32Decode, type OtpEntry } from "@marobotic/otp";
 import { importText } from "@marobotic/importers";
@@ -47,15 +48,64 @@ const restored = (async () => {
   await init();
   const s = await mem.get<{ key: string; session: string | null; rev: number }>("open");
   const file = await local.get<VaultFile | null>("file", null);
-  if (s && file) {
-    try { vault = Vault.withKey(file, fromBase64(s.key)); session = s.session; rev = s.rev; synced = session ? "synced" : "offline"; }
-    catch { await mem.del("open"); }
+  const open = s ?? (file && (await settings()).stayUnlocked ? await unkeep() : null);
+  if (open && file) {
+    try { vault = Vault.withKey(file, fromBase64(open.key)); session = open.session; rev = open.rev; synced = session ? "synced" : "offline"; }
+    catch { await mem.del("open"); await forget(); return; }
+    if (!s) { await remember(); void sync(); }
   }
 })();
 
 async function remember() {
   if (!vault) return;
-  await mem.set({ open: { key: toBase64(vault.keyBytes()), session, rev }, active: Date.now() });
+  const open = { key: toBase64(vault.keyBytes()), session, rev };
+  await mem.set({ open, active: Date.now() });
+  if ((await settings()).stayUnlocked) await keep(open);
+}
+
+// ------------------------------------------------------------------ staying unlocked across restarts
+type Open = { key: string; session: string | null; rev: number };
+function keyStore(): Promise<IDBDatabase> {
+  return new Promise((ok, fail) => {
+    const r = indexedDB.open("vault-keep", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("k");
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => fail(r.error);
+  });
+}
+/** This browser's own sealing key: made once, never readable (extractable: false). */
+async function sealKey(make: boolean): Promise<CryptoKey | null> {
+  const db = await keyStore();
+  const get = <T>(req: IDBRequest<T>) => new Promise<T>((ok, fail) => { req.onsuccess = () => ok(req.result); req.onerror = () => fail(req.error); });
+  let k = (await get(db.transaction("k").objectStore("k").get("seal"))) as CryptoKey | undefined;
+  if (!k && make) {
+    k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    await get(db.transaction("k", "readwrite").objectStore("k").put(k, "seal"));
+  }
+  db.close();
+  return k ?? null;
+}
+async function keep(open: Open) {
+  try {
+    const k = await sealKey(true);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k!, new TextEncoder().encode(JSON.stringify(open))));
+    await local.set({ kept: { iv: toBase64(iv), ct: toBase64(ct) } });
+  } catch { /* no IndexedDB here: it locks when the browser closes, as before */ }
+}
+async function unkeep(): Promise<Open | null> {
+  try {
+    const kept = await local.get<{ iv: string; ct: string } | null>("kept", null);
+    const k = kept && (await sealKey(false));
+    if (!kept || !k) return null;
+    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(kept.iv) }, k, fromBase64(kept.ct)))) as Open;
+  } catch { return null; }
+}
+function forget() { return chrome.storage.local.remove("kept"); }
+
+/** Pages showing "Vault is locked" (or logins) ask again at once. */
+async function tellTabs(t: "unlocked" | "locked") {
+  for (const tab of await chrome.tabs.query({})) if (tab.id !== undefined) chrome.tabs.sendMessage(tab.id, { t }).catch(() => {});
 }
 
 async function signIn(email: string, password: string): Promise<void> {
@@ -83,15 +133,19 @@ async function signIn(email: string, password: string): Promise<void> {
   if (mine) void sync();
 }
 
+
 async function opened(email: string) {
   if (mergeCodesIntoLogins(vault!).size) void sync();   // one entry per account: codes join their logins
   await local.set({ file: vault!.toFile(), email });
   await remember();
+  void tellTabs("unlocked");
 }
 
 async function lock() {
   vault = null; session = null;
   await mem.del(["open", "active"]);
+  await forget();
+  void tellTabs("locked");
 }
 
 /** Saved here, then sent to the server; another device's newer changes are merged in first. */
@@ -431,6 +485,7 @@ async function handle(m: Msg, s: chrome.runtime.MessageSender): Promise<unknown>
     case "setSettings": {
       await local.set({ settings: { ...(await settings()), ...m.settings } });
       if ("takeover" in m.settings) await applyTakeover();
+      if ("stayUnlocked" in m.settings) m.settings.stayUnlocked ? await remember() : await forget();
       return settings();
     }
     case "never": return { sites: await local.get<string[]>("never", []) };

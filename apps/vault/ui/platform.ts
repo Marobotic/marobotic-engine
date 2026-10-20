@@ -35,10 +35,11 @@ export async function vaultPath(): Promise<string> {
   return "this browser's storage (development only)";
 }
 
-/** Windows: Vault steps aside, every screen is captured, and the text of each QR code on them comes back. */
-export async function scanScreen(): Promise<string[]> {
+/** Windows: Vault steps aside and you drag a box around the QR code on screen; the text of the code(s)
+ *  in it comes back, or null when you cancel (Esc). */
+export async function scanScreen(): Promise<string[] | null> {
   if (!isDesktopApp) return [];
-  return tauri!<string[]>("scan_screen");
+  return tauri!<string[] | null>("scan_screen");
 }
 
 /** Windows: open otpauth:// links (an "add to authenticator" link on a web page) with Vault. */
