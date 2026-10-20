@@ -29,6 +29,8 @@ jobs:
         working-directory: apps/vault
         run: |
           npx tauri ios init
+          # Vault's own icon (full-bleed, from src-tauri/icons/ios) over the template's placeholder
+          cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
           npx tauri ios build --export-method debugging --no-sign || true
           # Fall back to a plain unsigned xcodebuild so we always get a .app to zip
           APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 4 2>/dev/null | head -1)
