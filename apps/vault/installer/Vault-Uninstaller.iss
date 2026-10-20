@@ -14,6 +14,10 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; The setup goes straight to Documents\Project Exports\Vault\Windows (/DOutDir=... for elsewhere).
+#ifndef OutDir
+  #define OutDir GetEnv("USERPROFILE") + "\Documents\Project Exports\Vault\Windows"
+#endif
 
 [Setup]
 AppId={{6E1B7C2A-3D4F-4A5B-9C8D-7E6F5A4B3C2D}
@@ -26,7 +30,7 @@ PrivilegesRequired=lowest
 DisableWelcomePage=no
 DisableReadyPage=no
 DisableFinishedPage=no
-OutputDir=..\src-tauri\target\release\bundle\uninstaller
+OutputDir={#OutDir}
 OutputBaseFilename=Vault-Uninstaller
 SetupIconFile=..\src-tauri\icons\icon.ico
 Compression=lzma2/max
