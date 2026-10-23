@@ -56,6 +56,28 @@ function toast(text: string) {
   toastTimer = window.setTimeout(() => (t.hidden = true), 2200);
 }
 
+/** Yes or no. The iPhone's web view has no confirm() (it answers "no" without asking), so there it's
+ *  Vault's own box. */
+function ask(text: string, yes = "OK"): Promise<boolean> {
+  if (!platform.isIos) return Promise.resolve(confirm(text));
+  return new Promise((done) => {
+    const back = h(`
+      <div class="backdrop">
+        <div class="m-modal modal settings">
+          <div class="content">
+            <div class="set"><div><span>${esc(text).replace(/\n/g, "<br>")}</span></div></div>
+            <div class="set"><div></div><button class="m-btn subtle compact" data-no>Cancel</button><button class="m-btn compact" data-yes>${esc(yes)}</button></div>
+          </div>
+        </div>
+      </div>`).firstElementChild as HTMLElement;
+    document.body.append(back);
+    const close = (v: boolean) => { back.remove(); done(v); };
+    $("[data-yes]", back).onclick = () => close(true);
+    $("[data-no]", back).onclick = () => close(false);
+    back.onclick = (e) => { if (e.target === back) close(false); };
+  });
+}
+
 async function save() {
   if (!vault) return;
   file = vault.toFile();
@@ -129,7 +151,7 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
         ${forgot ? "" : `<div class="hint">${create ? "At least 8 characters. Your vault is sealed with it on your devices; the server only ever keeps the sealed copy." : "The same account as Hourglass and Jukebox."}</div>`}
         <div class="notice" id="notice"></div>
         <div class="err" id="err">${esc(message)}</div>
-        ${quick ? `<button class="m-btn primary" type="button" id="quick">&#xf023; Unlock with fingerprint or screen lock</button>` : ""}
+        ${quick ? `<button class="m-btn primary" type="button" id="quick">&#xf023; Unlock with ${platform.quickUnlock.label}</button>` : ""}
         <button class="m-btn ${quick ? "" : "primary"}" type="submit">${forgot ? "Send reset link" : create ? "Create account" : "Sign in"}</button>
       </form>
       <div class="other">${forgot ? "Remembered it? " : create ? "Already have an account? " : "New here? "}<a href="#" id="flip">${forgot || create ? "Sign in" : "Create an account"}</a></div>
@@ -153,7 +175,7 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
     try { await openAccount(r.email, r.password); }
     catch (e) {
       if (e instanceof account.SignInError) { platform.quickUnlock.clear(); signInScreen("Your password changed. Sign in with the new one to turn quick unlock on again.", "signin", false); }
-      else { if (b) { b.disabled = false; b.innerHTML = "&#xf023; Unlock with fingerprint or screen lock"; } err((e as Error).message); }
+      else { if (b) { b.disabled = false; b.innerHTML = `&#xf023; Unlock with ${platform.quickUnlock.label}`; } err((e as Error).message); }
     }
   };
   $("#quick")?.addEventListener("click", () => void quickUnlock());
@@ -190,7 +212,7 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
 async function offerQuickUnlock() {
   if (!signedInWith || platform.quickUnlock.state() !== "ready" || localStorage.getItem("vault.quickAsked")) return;
   localStorage.setItem("vault.quickAsked", "1");
-  if (!confirm("Unlock Vault with your fingerprint or screen lock from now on, instead of typing your password?")) return;
+  if (!(await ask(`Unlock Vault with ${platform.quickUnlock.label} from now on, instead of typing your password?`))) return;
   const r = await platform.quickUnlock.save(signedInWith.email, signedInWith.password);
   toast(r.ok ? "Quick unlock is on" : r.error === "cancelled" ? "Quick unlock stays off" : `Couldn't turn it on: ${r.error}`);
 }
@@ -485,7 +507,7 @@ function settingsModal() {
           </div>` : ""}
           ${platform.quickUnlock.state() !== "unavailable" ? `
           <div class="set">
-            <div><b>Unlock with fingerprint or screen lock</b><span>Your password is sealed by the phone and only opens after your fingerprint, face or the phone's PIN.</span></div>
+            <div><b>Unlock with ${platform.quickUnlock.label}</b><span>Your password is sealed by the phone and only opens after your fingerprint, face or the phone's PIN.</span></div>
             <span class="m-switch ${platform.quickUnlock.state() === "saved" ? "on" : ""}" id="quickSw" role="switch" tabindex="0"></span>
           </div>` : ""}
         </div>
@@ -555,7 +577,7 @@ function settingsModal() {
   };
   $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin", false); };
   $("#kit", back).onclick = async () => {
-    if (!confirm("Make a new recovery kit? Your current one stops working, so write the new one down right away.")) return;
+    if (!(await ask("Make a new recovery kit? Your current one stops working, so write the new one down right away."))) return;
     const code = vault!.newRecoveryKit();
     await save();
     close();
@@ -607,7 +629,7 @@ function passkeyRow(i: PasskeyRow): HTMLElement {
   row.querySelector(".tileslot")!.replaceWith(entryIcon(d.rpName || d.rpId, siteKey(d.rpId)));
   row.title = `Signs you in on ${d.rpId}${d.created ? ` · saved ${new Date(d.created).toLocaleDateString()}` : ""}. Passkeys are used by the Vault browser extension and by Vault on Android.`;
   row.querySelector<HTMLElement>("[data-del]")!.onclick = async () => {
-    if (!confirm(`Delete the passkey for ${d.rpId} (${d.username})? Make sure you can still sign in there another way.`)) return;
+    if (!(await ask(`Delete the passkey for ${d.rpId} (${d.username})? Make sure you can still sign in there another way.`))) return;
     vault!.remove(i.id); await save(); renderList();
   };
   return row;
@@ -634,7 +656,7 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
   const del = {
     label: "Delete", icon: "&#xf1f8;", danger: true, onClick: async () => {
       const name = i.data.type === "login" ? i.data.name : nameOf(i as TotpRow);
-      if (!confirm(`Delete ${name}? Make sure you can still sign in another way.`)) return;
+      if (!(await ask(`Delete ${name}? Make sure you can still sign in another way.`))) return;
       vault!.remove(i.id); await save(); renderList();
     },
   };
@@ -651,7 +673,7 @@ function rowMenu(i: LoginRow | TotpRow, x: number, y: number) {
     openMenu(x, y, [{ title: nameOf(t), items: [{ label: "Copy code", icon: "&#xf0c5;", onClick: () => void copyCode(t.id, t.data.otp, t.data.otp.account || nameOf(t)) }] },
       { items: [pin, { label: "Edit code", icon: "&#xf044;", onClick: () => codeEditor(t) }, { label: "Edit login", icon: "&#xf084;", onClick: () => loginEditor(owner) }] },
       { items: [{ label: "Remove the code from this login", icon: "&#xf1f8;", danger: true, onClick: async () => {
-        if (!confirm(`Remove the 2FA code from ${owner.data.name}? Make sure you can still sign in another way.`)) return;
+        if (!(await ask(`Remove the 2FA code from ${owner.data.name}? Make sure you can still sign in another way.`))) return;
         const { otp: _gone, ...rest } = owner.data;
         vault!.update(owner.id, rest); await save(); renderList();
       } }] }]);
@@ -846,7 +868,7 @@ function codeEditor(t: TotpRow) {
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   back.onclick = (e) => { if (e.target === back) close(); };
   $("#del", back)?.addEventListener("click", async () => {
-    if (!confirm(`Delete ${nameOf(t)}? Make sure you can still sign in another way.`)) return;
+    if (!(await ask(`Delete ${nameOf(t)}? Make sure you can still sign in another way.`))) return;
     vault!.remove(t.id); await save(); close();
   });
   $<HTMLFormElement>("form", back).onsubmit = async (ev) => {
@@ -928,7 +950,7 @@ function loginEditor(existing: LoginRow | null) {
   $("#gen", back).onclick = () => { pass.value = generatePassword({ length: 20 }); pass.type = "text"; };
   $("#name", back).focus();
   $("#del", back)?.addEventListener("click", async () => {
-    if (!existing || !confirm(`Delete ${existing.data.name}? This can't be undone.`)) return;
+    if (!existing || !(await ask(`Delete ${existing.data.name}? This can't be undone.`))) return;
     vault!.remove(existing.id);
     await save();
     close();
@@ -1229,12 +1251,12 @@ function importModal() {
 }
 
 /** An otpauth:// link Vault was opened with (a site's "add to authenticator app" link). */
-function offerLink(link: string) {
+async function offerLink(link: string) {
   if (!vault) { pendingLink = link; return; }
   const r = importText(link);
   if (!r.entries.length) return toast(`That link isn't a 2FA code${r.skipped[0] ? ` (${r.skipped[0]})` : ""}`);
   const names = r.entries.map((e) => [e.issuer, e.account].filter(Boolean).join(" · ")).join(", ");
-  if (!confirm(`Add this 2FA code to Vault?\n\n${names}`)) return;
+  if (!(await ask(`Add this 2FA code to Vault?\n\n${names}`))) return;
   void addCodes(r).then((x) => { toast(x.added ? `Added ${x.names.join(", ")}` : "Already in Vault"); filter = "totp"; homeScreen(); });
 }
 

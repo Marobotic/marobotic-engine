@@ -7,7 +7,8 @@ const tauri = T?.core?.invoke;
 
 export const inApp = Boolean(tauri);
 export const isAndroid = /Android/i.test(navigator.userAgent);
-export const isMobile = isAndroid || /iPhone|iPad/i.test(navigator.userAgent);
+export const isIos = /iPhone|iPad/i.test(navigator.userAgent);
+export const isMobile = isAndroid || isIos;
 /** The Windows app: the screen can be scanned, the browser extension can connect. */
 export const isDesktopApp = inApp && !isMobile;
 
@@ -152,10 +153,40 @@ function nativeAnswer<T>(start: (id: number) => void): Promise<T> {
     start(id);
   });
 }
+// iPhone: the same, behind Face ID in the Keychain (quick_unlock.rs). Whether it's on is remembered
+// here so the sign-in screen knows straight away; the Keychain item is what really unlocks.
+const ios = tauri && isIos;
+const IOS_ON = "vault.quickUnlock";
+const iosOn = (on?: boolean) => {
+  try {
+    if (on === true) localStorage.setItem(IOS_ON, "1");
+    else if (on === false) localStorage.removeItem(IOS_ON);
+    return localStorage.getItem(IOS_ON) === "1";
+  } catch { return false; }
+};
 export const quickUnlock = {
+  /** What the phone unlocks with, for buttons and settings. */
+  label: ios ? "Face ID" : "fingerprint or screen lock",
   /** "unavailable" (no fingerprint/screen lock, or not a phone), "ready", or "saved". */
-  state: (): string => (android ? android.unlockState() : "unavailable"),
-  clear: () => android?.unlockClear(),
-  save: (email: string, password: string) => nativeAnswer<{ ok: boolean; error: string }>((id) => android!.unlockSave(id, email, password)),
-  open: () => nativeAnswer<{ email?: string; password?: string; error?: string }>((id) => android!.unlockOpen(id)),
+  state: (): string => (android ? android.unlockState() : ios ? (iosOn() ? "saved" : "ready") : "unavailable"),
+  clear: () => {
+    if (android) return android.unlockClear();
+    if (ios) { iosOn(false); void tauri("unlock_clear"); }
+  },
+  save: (email: string, password: string): Promise<{ ok: boolean; error: string }> => {
+    if (android) return nativeAnswer((id) => android!.unlockSave(id, email, password));
+    return tauri!<void>("unlock_save", { email, password }).then(
+      () => (iosOn(true), { ok: true, error: "" }),
+      (e) => ({ ok: false, error: String(e) }),
+    );
+  },
+  open: (): Promise<{ email?: string; password?: string; error?: string }> => {
+    if (android) return nativeAnswer((id) => android!.unlockOpen(id));
+    return tauri!<{ email: string; password: string }>("unlock_open").catch((e) => {
+      const error = String(e);
+      if (error !== "gone") return { error };
+      iosOn(false);
+      return { error: "Face ID unlock was turned off on this iPhone. Sign in with your password to turn it on again." };
+    });
+  },
 };

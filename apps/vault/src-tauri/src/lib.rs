@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+#[cfg(target_os = "ios")]
+mod quick_unlock;
+
 
 fn vault_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -351,6 +354,42 @@ fn set_browser_lockdown(_on: bool) -> Vec<String> {
     Vec::new()
 }
 
+/// iPhone: quick unlock with Face ID (quick_unlock.rs). Async, off the main thread: the Keychain waits
+/// for Face ID while it reads.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn unlock_save(email: String, password: String) -> Result<(), String> {
+    let secret = serde_json::json!({ "email": email, "password": password }).to_string();
+    tauri::async_runtime::spawn_blocking(move || quick_unlock::save(secret.as_bytes())).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn unlock_open() -> Result<serde_json::Value, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(|| quick_unlock::open("Unlock Vault")).await.map_err(|e| e.to_string())??;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn unlock_clear() {
+    quick_unlock::clear();
+}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn unlock_save() -> Result<(), String> {
+    Err("not on this device".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn unlock_open() -> Result<(), String> {
+    Err("not on this device".into())
+}
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn unlock_clear() {}
+
 /// The otpauth:// link Vault was started with (Windows), handed to the window once.
 struct LaunchLink(std::sync::Mutex<Option<String>>);
 
@@ -440,7 +479,8 @@ pub fn run() {
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state
+            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state,
+            unlock_save, unlock_open, unlock_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");

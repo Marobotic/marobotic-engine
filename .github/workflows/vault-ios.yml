@@ -31,6 +31,13 @@ jobs:
           npx tauri ios init
           # Vault's own icon (full-bleed, from src-tauri/icons/ios) over the template's placeholder
           cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+          # Face ID unlock (src/quick_unlock.rs): iOS ends the app if this line is missing. Info.ios.plist
+          # carries it too; this makes sure the generated project has it.
+          FACE="Vault opens with Face ID instead of your password."
+          for P in $(find src-tauri/gen/apple -name Info.plist -path "*_iOS*"); do
+            /usr/libexec/PlistBuddy -c "Set :NSFaceIDUsageDescription '$FACE'" "$P" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :NSFaceIDUsageDescription string '$FACE'" "$P"
+            echo "$P: $(/usr/libexec/PlistBuddy -c 'Print :NSFaceIDUsageDescription' "$P")"
+          done
           npx tauri ios build --export-method debugging --no-sign || true
           # Fall back to a plain unsigned xcodebuild so we always get a .app to zip
           APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 4 2>/dev/null | head -1)
