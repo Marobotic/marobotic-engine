@@ -169,3 +169,6 @@ details.more summary:hover { color: var(--fg); }
 /* an open dialog: the page behind it stays put */
 body:has(.backdrop) { overflow: hidden; }
 .backdrop { overscroll-behavior: contain; }
+
+/* Hourglass Material outlined settings vector. */
+.ecosystem-icon { width: 24px; height: 24px; flex: none; vertical-align: middle; }
