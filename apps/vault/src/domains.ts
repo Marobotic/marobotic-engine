@@ -32,6 +32,7 @@ export const SAME_SIGN_IN: string[][] = [
   ["x.com", "twitter.com"],
   ["facebook.com", "messenger.com", "instagram.com"],
   ["ea.com", "origin.com"],
+  ["reddit.com", "redd.it"],
 ];
 const GROUP = new Map<string, string>();
 for (const g of SAME_SIGN_IN) for (const d of g) GROUP.set(d, g[0]!);

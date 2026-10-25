@@ -25,14 +25,100 @@ const visible = (el: HTMLElement) => {
 const labelOf = (el: HTMLInputElement) => [...(el.labels ?? [])].map((l) => l.textContent ?? "").join(" ");
 /** Text printed next to a field with no <label> ("One-Time Password" in a cell before it). */
 function nearText(el: HTMLInputElement): string {
-  const by = el.getAttribute("aria-labelledby")?.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ") ?? "";
+  const root = el.getRootNode();
+  const by = el.getAttribute("aria-labelledby")?.split(/\s+/).map((id) =>
+    (root instanceof Document || root instanceof ShadowRoot ? root.getElementById(id) : document.getElementById(id))?.textContent ?? ""
+  ).join(" ") ?? "";
   if (by.trim() || el.labels?.length) return by;
   const t = `${el.previousElementSibling?.textContent ?? ""} ${el.parentElement?.previousElementSibling?.textContent ?? ""}`.trim();
   return t.length <= 60 ? t : "";
 }
-const attrs = (el: HTMLInputElement) => [el.name, el.id, el.placeholder, el.getAttribute("aria-label"), el.getAttribute("autocomplete"), el.getAttribute("data-testid"), labelOf(el)].join(" ");
-const inputs = (scope: ParentNode) => [...scope.querySelectorAll<HTMLInputElement>("input")].filter((i) => !i.disabled && visible(i));
-const scopeOf = (el: Element) => (el as HTMLInputElement).form ?? el.closest("form") ?? document;
+
+function hostAttrsOf(el: HTMLInputElement): string {
+  const root = el.getRootNode();
+  if (root instanceof ShadowRoot && root.host) {
+    const h = root.host;
+    return [
+      h.getAttribute("name"),
+      h.id,
+      h.getAttribute("label"),
+      h.getAttribute("placeholder"),
+      h.getAttribute("aria-label"),
+      h.getAttribute("autocomplete"),
+      h.getAttribute("data-testid"),
+    ].filter(Boolean).join(" ");
+  }
+  return "";
+}
+
+const attrs = (el: HTMLInputElement) => [
+  el.name,
+  el.id,
+  el.placeholder,
+  el.getAttribute("aria-label"),
+  el.getAttribute("autocomplete"),
+  el.getAttribute("data-testid"),
+  labelOf(el),
+  hostAttrsOf(el),
+].join(" ");
+
+/** Deeply searches for visible inputs across light DOM and open shadow roots in document order. */
+function inputs(scope: ParentNode): HTMLInputElement[] {
+  const list: HTMLInputElement[] = [];
+  const seen = new Set<HTMLInputElement>();
+
+  function walk(node: Node) {
+    if (node instanceof HTMLInputElement) {
+      if (node.type !== "hidden" && !node.disabled && visible(node) && !seen.has(node)) {
+        seen.add(node);
+        list.push(node);
+      }
+    }
+    if (node instanceof Element && node.shadowRoot) {
+      for (let c = node.shadowRoot.firstChild; c; c = c.nextSibling) {
+        walk(c);
+      }
+    }
+    for (let c = node.firstChild; c; c = c.nextSibling) {
+      walk(c);
+    }
+  }
+
+  if (scope instanceof Document) {
+    walk(scope.documentElement ?? scope);
+  } else {
+    walk(scope);
+  }
+  return list;
+}
+
+/** Climbs up ancestors, piercing shadow boundaries, to find an enclosing form. */
+function scopeOf(el: Element): ParentNode {
+  if ((el as HTMLInputElement).form) return (el as HTMLInputElement).form!;
+  let curr: Element | null = el;
+  while (curr) {
+    const form = curr.closest("form");
+    if (form) return form;
+    const root = curr.getRootNode();
+    if (root instanceof ShadowRoot) {
+      curr = root.host;
+    } else {
+      break;
+    }
+  }
+  return document;
+}
+
+/** Pierces activeElement across shadow roots to find the deeply focused element. */
+function getActiveElement(doc: Document = document): Element | null {
+  let el = doc.activeElement;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+    el = el.shadowRoot.activeElement;
+  }
+  return el;
+}
+
+const targetOf = (e: Event): EventTarget | null => (e.composedPath && e.composedPath()[0]) || e.target;
 
 function isSignup(el: HTMLInputElement): boolean {
   const pws = inputs(scopeOf(el)).filter((i) => i.type === "password");
@@ -79,8 +165,8 @@ function userFieldFor(scope: ParentNode, pw?: HTMLInputElement): HTMLInputElemen
 function setValue(el: HTMLInputElement, value: string) {
   el.focus();
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
-  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: value }));
+  el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 }
 
 /** A sign-in name field that asks for an email ("Email or Phone Number", type=email). */
@@ -88,8 +174,10 @@ const wantsEmail = (el: HTMLInputElement) => el.type === "email" || /e-?mail/i.t
 
 function fillLogin(username: string, password: string, anchor?: HTMLInputElement, email = "") {
   const scope = anchor ? scopeOf(anchor) : document;
-  const pw = inputs(scope).find((i) => i.type === "password");
-  const user = anchor && kindOf(anchor) === "username" ? anchor : userFieldFor(scope, pw);
+  let pw = inputs(scope).find((i) => i.type === "password");
+  if (!pw && scope !== document) pw = inputs(document).find((i) => i.type === "password");
+  let user = anchor && kindOf(anchor) === "username" ? anchor : userFieldFor(scope, pw);
+  if (!user && scope !== document) user = userFieldFor(document, pw);
   const name = user && wantsEmail(user) ? email || username : username || email;
   if (user && name) setValue(user, name);
   if (pw && password) setValue(pw, password);
@@ -248,7 +336,7 @@ async function offerFor(field: HTMLInputElement, why: "focus" | "click" | "input
   if (!kind) return;
   const s = await settings();
   const m = await matches(kind === "otp");
-  if (document.activeElement !== field || m.error || Date.now() < quietUntil) return;
+  if (getActiveElement() !== field || m.error || Date.now() < quietUntil) return;
   const logins = m.logins ?? [], codes = m.codes ?? [];
 
   if (kind === "otp") {
@@ -287,19 +375,48 @@ async function fillFrom(id: string, field?: HTMLInputElement) {
   fillLogin(r.username ?? "", r.password ?? "", field, r.email ?? "");
 }
 
-document.addEventListener("focusin", (e) => { const t = e.target; if (t instanceof HTMLInputElement && t !== boxFor) { if (dismissed !== t) dismissed = null; void offerFor(t, "focus"); } }, true);
-document.addEventListener("click", (e) => { const t = e.target; if (t instanceof HTMLInputElement && kindOf(t) && !(box && t === boxFor)) void offerFor(t, "click"); }, true);
+document.addEventListener("focusin", (e) => {
+  const t = targetOf(e);
+  if (t instanceof HTMLInputElement && t !== boxFor) {
+    if (dismissed !== t) dismissed = null;
+    void offerFor(t, "focus");
+  }
+}, true);
+document.addEventListener("click", (e) => {
+  const t = targetOf(e);
+  if (t instanceof HTMLInputElement && kindOf(t) && !(box && t === boxFor)) void offerFor(t, "click");
+}, true);
 // Typing narrows the list, or closes it when nothing fits.
 let typing = 0;
 document.addEventListener("input", (e) => {
-  const t = e.target;
-  if (!(t instanceof HTMLInputElement) || !e.isTrusted || document.activeElement !== t) return;
+  const t = targetOf(e);
+  if (!(t instanceof HTMLInputElement) || !e.isTrusted || getActiveElement() !== t) return;
   clearTimeout(typing);
   typing = window.setTimeout(() => void offerFor(t, "input"), 120);
 }, true);
-document.addEventListener("focusout", () => setTimeout(() => { if (box && document.activeElement !== boxFor) closeBox(); }, 150), true);
+// SPAs often insert or finish configuring a login field after the page has loaded. Recheck the
+// focused field when that happens so the user doesn't have to reload (or refocus) the page.
+let domScan = 0;
+new MutationObserver((records) => {
+  const field = getActiveElement();
+  if (!(field instanceof HTMLInputElement) || field === boxFor || !visible(field) || !kindOf(field)) return;
+  const changed = records.some((record) => record.type === "attributes"
+    ? record.target === field
+    : [...record.addedNodes].some((node) => node === field || (node instanceof Element && node.contains(field))));
+  if (!changed) return;
+  clearTimeout(domScan);
+  domScan = window.setTimeout(() => void offerFor(field, "focus"), 100);
+}).observe(document, {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ["type", "name", "id", "placeholder", "aria-label", "aria-labelledby", "autocomplete", "disabled", "readonly"],
+});
+document.addEventListener("focusout", () => setTimeout(() => { if (box && getActiveElement() !== boxFor) closeBox(); }, 150), true);
 document.addEventListener("keydown", (e) => {
-  if (!box || e.target !== boxFor) return;
+  if (!box) return;
+  const t = targetOf(e);
+  if (t !== boxFor) return;
   if (e.key === "Escape") { dismissed = boxFor; return closeBox(); }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
@@ -332,15 +449,27 @@ function captured(scope: ParentNode) {
   lastSent = { key, at: Date.now() };
   void send({ t: "submitted", username, password: pw.value });
 }
-document.addEventListener("submit", (e) => captured(e.target as HTMLFormElement), true);
+document.addEventListener("submit", (e) => {
+  const t = targetOf(e);
+  if (t instanceof HTMLFormElement) captured(t);
+  else if (e.target instanceof HTMLFormElement) captured(e.target);
+}, true);
 document.addEventListener("click", (e) => {
-  const b = (e.target as Element | null)?.closest?.("button, input[type=submit], input[type=button], [role=button], a");
+  const path = e.composedPath?.() ?? [e.target];
+  let b: Element | null = null;
+  for (const el of path) {
+    if (el instanceof Element && el.closest) {
+      b = el.closest("button, input[type=submit], input[type=button], [role=button], a");
+      if (b) break;
+    }
+  }
   if (!b) return;
   const text = `${b.textContent ?? ""} ${(b as HTMLInputElement).value ?? ""} ${b.getAttribute("aria-label") ?? ""} ${b.id}`;
   if ((b as HTMLButtonElement).type === "submit" || SUBMIT_RE.test(text)) captured(scopeOf(b));
 }, true);
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target instanceof HTMLInputElement) captured(scopeOf(e.target));   // a picked suggestion never gets here
+  const t = targetOf(e);
+  if (e.key === "Enter" && t instanceof HTMLInputElement) captured(scopeOf(t));   // a picked suggestion never gets here
 }, true);
 
 // ------------------------------------------------------------------ "Save this login?"
@@ -369,11 +498,13 @@ function offerSave(o: Offer) {
 }
 
 // ------------------------------------------------------------------ from the toolbar and the shortcut
-chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>) => {
+chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>, _sender, reply) => {
+  if (m.t === "vaultPing") { reply({ ok: true }); return; }
   if (m.t === "offerSave" && window === top) offerSave(m as unknown as Offer);
   if (m.t === "doFill") {
     quiet();
-    const focused = document.activeElement instanceof HTMLInputElement ? document.activeElement : undefined;
+    const active = getActiveElement();
+    const focused = active instanceof HTMLInputElement ? active : undefined;
     if (focused && kindOf(focused) === "otp" && m.code) fillCode(m.code, focused);
     else fillLogin(m.username ?? "", m.password ?? "", focused && kindOf(focused) ? focused : undefined, m.email ?? "");
   }
@@ -382,14 +513,16 @@ chrome.runtime.onMessage.addListener((m: { t: string } & Record<string, string>)
   if (m.t === "unlocked" || m.t === "locked") {
     cache = null;
     quietUntil = 0;
-    const f = boxFor ?? (document.activeElement instanceof HTMLInputElement ? document.activeElement : null);
+    const active = getActiveElement();
+    const f = boxFor ?? (active instanceof HTMLInputElement ? active : null);
     if (f && kindOf(f)) void offerFor(f, "click");
   }
 });
 
 async function fillBest() {
   quiet();
-  const focused = document.activeElement instanceof HTMLInputElement ? document.activeElement : undefined;
+    const active = getActiveElement();
+    const focused = active instanceof HTMLInputElement ? active : undefined;
   const m = await matches(true);
   if (focused && kindOf(focused) === "otp") {
     const c = m.codes?.[0];

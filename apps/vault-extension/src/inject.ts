@@ -2,6 +2,10 @@
 // for passkeys go to Vault first. Vault answers only after you confirm in its own panel (drawn by the
 // content script, out of the page's reach); anything Vault doesn't take goes to the browser as usual.
 (() => {
+  const page = window as Window & { __vaultPasskeyHookInstalled?: boolean };
+  if (page.__vaultPasskeyHookInstalled) return;
+  page.__vaultPasskeyHookInstalled = true;
+
   const creds = navigator.credentials;
   if (!creds || !window.PublicKeyCredential) return;
   const nativeCreate = creds.create.bind(creds);

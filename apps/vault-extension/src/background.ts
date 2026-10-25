@@ -98,7 +98,7 @@ async function unkeep(): Promise<Open | null> {
     const kept = await local.get<{ iv: string; ct: string } | null>("kept", null);
     const k = kept && (await sealKey(false));
     if (!kept || !k) return null;
-    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(kept.iv) }, k, fromBase64(kept.ct)))) as Open;
+    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(kept.iv) as BufferSource }, k, fromBase64(kept.ct) as BufferSource))) as Open;
   } catch { return null; }
 }
 function forget() { return chrome.storage.local.remove("kept"); }
@@ -202,7 +202,23 @@ async function applyTakeover() {
   }
 }
 chrome.runtime.onInstalled.addListener(() => void applyTakeover());
-chrome.runtime.onStartup.addListener(() => void applyTakeover());
+chrome.runtime.onStartup.addListener(() => { void applyTakeover(); void injectOpenTabs(); });
+
+/** Declarative content scripts don't run in tabs that were already open during install/update. */
+async function injectOpenTabs() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map(async (tab) => {
+    if (tab.id === undefined || !/^https?:\/\//i.test(tab.url ?? "")) return;
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { t: "vaultPing" }, { frameId: 0 });
+      if (response?.ok) return;
+    } catch { /* no content script in this tab yet */ }
+    const target = { tabId: tab.id, allFrames: true };
+    try { await chrome.scripting.executeScript({ target, files: ["inject.js"], world: "MAIN" }); } catch { /* restricted frame or tab closed */ }
+    try { await chrome.scripting.executeScript({ target, files: ["content.js"] }); } catch { /* restricted frame or tab closed */ }
+  }));
+}
+chrome.runtime.onInstalled.addListener(() => void injectOpenTabs());
 
 // ------------------------------------------------------------------ reading the vault
 const logins = () => (vault?.list("login") ?? []) as LoginRow[];

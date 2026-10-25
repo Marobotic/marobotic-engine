@@ -25,7 +25,8 @@
   "permissions": [
     "storage",
     "privacy",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
