@@ -318,11 +318,19 @@ fn extension_browsers() -> Vec<serde_json::Value> {
     ].iter().filter_map(|(id, name, profile)| {
         let root = std::path::Path::new(&local).join(profile);
         if !root.exists() { return None; }
+        // Any profile that has Vault and hasn't turned it off. Chromium keeps an unpacked extension's entry
+        // in "Secure Preferences" (older versions in "Preferences"), with "state" only in older versions.
+        let on = |v: &serde_json::Value| {
+            let state = v.get("state").and_then(serde_json::Value::as_i64).unwrap_or(1);
+            let off = v.get("disable_reasons").is_some_and(|d| d.as_array().map_or(d.as_i64().unwrap_or(0) != 0, |a| !a.is_empty()));
+            state == 1 && !off
+        };
         let installed = fs::read_dir(&root).ok()?.filter_map(Result::ok).any(|entry| {
-            let p = entry.path().join("Preferences");
-            fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).and_then(|v| {
-                v.pointer(&format!("/extensions/settings/{VAULT_EXTENSION_ID}/state")).and_then(serde_json::Value::as_i64)
-            }).is_some_and(|state| state == 1)
+            ["Secure Preferences", "Preferences"].iter().any(|f| {
+                fs::read_to_string(entry.path().join(f)).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| v.pointer(&format!("/extensions/settings/{VAULT_EXTENSION_ID}")).map(on))
+                    .unwrap_or(false)
+            })
         });
         Some(serde_json::json!({ "id": id, "name": name, "installed": installed, "folder": extension_root().display().to_string() }))
     }).collect()
