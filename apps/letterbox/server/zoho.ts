@@ -113,11 +113,14 @@ export class Zoho implements Mailbox {
   private access: string | null = null;
   private expires = 0;
   private account: { id: string; email: string; name: string } | null = null;
+  private readonly cfg: ZohoLogin;
   private readonly accounts: string;
   private readonly mail: string;
 
-  constructor(private readonly cfg: ZohoLogin) {
+  // No parameter properties: the droplet runs this file with Node's type stripping, which can't.
+  constructor(cfg: ZohoLogin) {
     if (!cfg.refresh_token) throw new Error("no refresh_token");
+    this.cfg = cfg;
     this.accounts = cfg.accounts ?? "https://accounts.zoho.com";
     this.mail = mailServer(this.accounts);
   }

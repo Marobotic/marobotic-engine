@@ -24,8 +24,10 @@ export class AccountStore {
   private list: Account[] = [];
   private carriedOver: string[] = [];
   private readonly key: Buffer;
+  private readonly file: string;
 
-  constructor(private readonly file: string, keyFile: string) {
+  constructor(file: string, keyFile: string) {
+    this.file = file;
     if (!existsSync(keyFile)) {
       mkdirSync(dirname(keyFile), { recursive: true });
       writeFileSync(keyFile, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
