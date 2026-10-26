@@ -22,7 +22,7 @@ fn vault_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(vault_file(&app)?.display().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_vault(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = vault_file(&app)?;
     match fs::read_to_string(&path) {
@@ -34,8 +34,10 @@ fn load_vault(app: tauri::AppHandle) -> Result<Option<String>, String> {
 
 /// Written to a temporary file and renamed over the old one, so a crash mid-write never leaves half
 /// a vault; the previous version stays as vault.json.bak.
-#[tauri::command]
+#[tauri::command(async)]
 fn save_vault(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_at_a_time = SAVING.lock().unwrap_or_else(|e| e.into_inner());
     serde_json::from_str::<serde_json::Value>(&json).map_err(|_| "refusing to save something that isn't a vault".to_string())?;
     let path = vault_file(&app)?;
     let tmp = path.with_extension("json.tmp");
@@ -48,7 +50,7 @@ fn save_vault(app: tauri::AppHandle, json: String) -> Result<(), String> {
 
 /// One attempt at XIVLauncher's OTP endpoint (https://goatcorp.github.io/faq/mobile_otp):
 /// GET http://<host>:4646/ffxivlauncher/<code>. True when it answered 200.
-#[tauri::command]
+#[tauri::command(async)]
 fn xl_send(code: String, host: String) -> bool {
     if code.is_empty() || code.len() > 10 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return false;
@@ -251,7 +253,7 @@ fn snip_done() {}
 
 /// Windows: otpauth:// links (a site's "add to authenticator app" button) open Vault. Per user, no admin.
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn set_link_handler(on: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let reg = |args: &[&str]| {
@@ -275,7 +277,7 @@ fn set_link_handler(on: bool) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn set_link_handler(_on: bool) {}
 
 /// Windows: Brave, Chrome and Edge stop offering and filling their own saved passwords (and their
@@ -308,7 +310,7 @@ fn extension_root() -> PathBuf {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn extension_browsers() -> Vec<serde_json::Value> {
     let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
     [
@@ -337,7 +339,7 @@ fn extension_browsers() -> Vec<serde_json::Value> {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn open_extensions(id: String) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let (exe, url): (&str, &str) = match id.as_str() {
@@ -352,25 +354,25 @@ fn open_extensions(id: String) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn open_extension_folder() -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     std::process::Command::new("explorer").arg(extension_root()).creation_flags(0x0800_0000).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn extension_browsers() -> Vec<serde_json::Value> { Vec::new() }
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn open_extensions(_id: String) -> Result<(), String> { Err("Windows only".into()) }
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn open_extension_folder() -> Result<(), String> { Err("Windows only".into()) }
 
 /// Which installed browsers have their own password manager turned off (read from the registry).
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn browser_lockdown_state() -> Vec<(String, bool)> {
     use std::os::windows::process::CommandExt;
     installed_browsers().into_iter().map(|(name, key)| {
@@ -381,7 +383,7 @@ fn browser_lockdown_state() -> Vec<(String, bool)> {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[tauri::command(async)]
 fn set_browser_lockdown(on: bool) -> Result<Vec<String>, String> {
     use std::os::windows::process::CommandExt;
     let browsers = installed_browsers();
@@ -413,13 +415,13 @@ fn set_browser_lockdown(on: bool) -> Result<Vec<String>, String> {
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn browser_lockdown_state() -> Vec<(String, bool)> {
     Vec::new()
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[tauri::command(async)]
 fn set_browser_lockdown(_on: bool) -> Vec<String> {
     Vec::new()
 }
