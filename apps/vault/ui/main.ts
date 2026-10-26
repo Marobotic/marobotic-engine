@@ -80,6 +80,7 @@ function ask(text: string, yes = "OK"): Promise<boolean> {
 
 async function save() {
   if (!vault) return;
+  forgetMatches();
   file = vault.toFile();
   await platform.saveVault(JSON.stringify(file));
   refreshAutofill();
@@ -95,7 +96,7 @@ function sync(): Promise<void> {
         const r = await account.pushVault(session, rev, vault.toFile());
         if ("rev" in r) { rev = r.rev; setSyncState("synced"); return; }
         rev = r.conflict.rev;
-        if (vault.merge(r.conflict.file.items)) { file = vault.toFile(); await platform.saveVault(JSON.stringify(file)); renderList(); }
+        if (vault.merge(r.conflict.file.items)) { forgetMatches(); file = vault.toFile(); await platform.saveVault(JSON.stringify(file)); renderList(); }
       }
     } catch (e) {
       setSyncState(e instanceof account.SignInError ? "signed out" : "offline");
@@ -318,11 +319,54 @@ const logins = () => (vault?.list("login") ?? []) as LoginRow[];
 const groupCode = (c: string) => (c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c.length === 8 ? `${c.slice(0, 4)} ${c.slice(4)}` : c);
 const nameOf = (i: TotpRow) => i.data.label || i.data.otp.issuer || i.data.otp.account || "Untitled";
 
+// Worked out from the items and kept until they change (save() or a sync calls forgetMatches()): with
+// hundreds of logins and codes, matching them on every tick and every keystroke made Vault crawl.
+let matched = new WeakMap<LoginItem, OtpEntry | null>();   // a login without a code of its own -> the code that matches it
+let owners: Map<string, LoginRow> | null = null;           // a separate 2FA code's id -> the login it belongs to
+const rowCache = new Map<string, { key: string; row: HTMLElement }>();
+let matchedFor: Vault | null = null;
+function forgetMatches() {
+  matched = new WeakMap();
+  owners = null;
+  rowCache.clear();
+  matchedFor = vault;
+}
+const fresh = () => { if (matchedFor !== vault) forgetMatches(); };
+
 /** A login's one-time code: its own, else (older vaults) the code it is linked to or that matches it. */
 function codeFor(login: LoginItem): OtpEntry | undefined {
   if (login.otp) return login.otp;
   if (login.totpId) { const it = vault?.get(login.totpId); if (it?.data.type === "totp") return it.data.otp; }
-  return matchTotp(login, standaloneCodes().map((i) => i.data))?.otp;
+  fresh();
+  if (!matched.has(login)) matched.set(login, matchTotp(login, standaloneCodes().map((i) => i.data))?.otp ?? null);
+  return matched.get(login) ?? undefined;
+}
+
+/** The login a separate 2FA code belongs to: the one linked to it, else the first whose site matches it. */
+function ownerOf(code: TotpRow): LoginRow | undefined {
+  fresh();
+  if (!owners) {
+    owners = new Map();
+    const ls = logins();
+    for (const l of ls) if (l.data.totpId && !owners.has(l.data.totpId)) owners.set(l.data.totpId, l);
+    const loose = ls.filter((l) => !l.data.totpId);
+    for (const c of standaloneCodes()) {
+      if (owners.has(c.id)) continue;
+      const l = loose.find((x) => matchTotp(x.data, [c.data]));
+      if (l) owners.set(c.id, l);
+    }
+  }
+  return owners.get(code.id);
+}
+
+// A code only changes once a period, so each is worked out once per step rather than on every tick.
+const codeMemo = new Map<string, { step: number; code: Promise<string> }>();
+async function codeAt(otp: OtpEntry, now: number): Promise<{ code: string; remaining: number }> {
+  const step = Math.floor(now / 1000 / otp.period);
+  const k = `${otp.secret}|${otp.algorithm}|${otp.digits}|${otp.period}`;
+  let m = codeMemo.get(k);
+  if (!m || m.step !== step) { m = { step, code: totp(otp, now).then((r) => r.code) }; codeMemo.set(k, m); }
+  return { code: await m.code, remaining: otp.period - (Math.floor(now / 1000) % otp.period) };
 }
 
 /** Logins picked on this device (copied here, or filled by Android autofill): +1 each, synced, so the
@@ -366,7 +410,11 @@ function homeScreen() {
     b.onclick = () => { filter = v; homeScreen(); };
     seg.append(b);
   }
-  $<HTMLInputElement>("#q").oninput = (e) => { query = (e.target as HTMLInputElement).value; renderList(); };
+  let typed = 0;
+  $<HTMLInputElement>("#q").oninput = (e) => {
+    query = (e.target as HTMLInputElement).value;
+    if (!typed) typed = requestAnimationFrame(() => { typed = 0; renderList(); });
+  };
   renderList();
   if (autoXlId) startAutoXl();
   if (session) void sync();
@@ -595,11 +643,23 @@ function renderList() {
   const ls = logins().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || (query.trim() ? n(b) - n(a) : 0) || a.data.name.localeCompare(b.data.name) || n(b) - n(a));
   const ts = otps().sort((a, b) => pinFirst(!!a.data.favorite, !!b.data.favorite) || nameOf(a).localeCompare(nameOf(b)));
   const rows: HTMLElement[] = [];
-  if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.email ?? ""} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(loginRow(i));
+  fresh();
+  // A row is made once per version of its item and reused (searching only picks which rows show).
+  const cached = (id: string, key: string, make: () => HTMLElement) => {
+    const c = rowCache.get(id);
+    if (c && c.key === key) return c.row;
+    const row = make();
+    rowCache.set(id, { key, row });
+    return row;
+  };
+  if (filter === "login") for (const i of ls) if (matchesQuery(`${i.data.name} ${i.data.email ?? ""} ${i.data.username} ${i.data.urls.join(" ")}`)) rows.push(cached("l" + i.id, String(i.updated), () => loginRow(i)));
   const ps = passkeys().sort((a, b) => (a.data.rpName || a.data.rpId).localeCompare(b.data.rpName || b.data.rpId));
-  if (filter === "login") for (const i of ps) if (matchesQuery(`${i.data.rpName ?? ""} ${i.data.rpId} ${i.data.username}`)) rows.push(passkeyRow(i));
+  if (filter === "login") for (const i of ps) if (matchesQuery(`${i.data.rpName ?? ""} ${i.data.rpId} ${i.data.username}`)) rows.push(cached("p" + i.id, String(i.updated), () => passkeyRow(i)));
   const ff = new Set(platform.isDesktopApp ? ffxivEntries(ts.map((i) => i.data.otp)) : []);   // sending to XIVLauncher is desktop only
-  if (filter === "totp") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) rows.push(codeRow(i, ff.has(i.data.otp)));
+  if (filter === "totp") for (const i of ts) if (matchesQuery(`${nameOf(i)} ${i.data.otp.issuer} ${i.data.otp.account}`)) {
+    const isFf = ff.has(i.data.otp);
+    rows.push(cached("c" + i.id, `${i.updated}|${isFf}|${isFf && autoXlId === i.id}`, () => codeRow(i, isFf)));
+  }
 
   if (!rows.length) {
     const shown = filter === "totp" ? ts.length : ls.length + ps.length;
@@ -725,7 +785,7 @@ function loginRow(i: LoginRow): HTMLElement {
 function siteForCode(i: TotpRow): string {
   const own = i.data.inLogin ? (vault?.get(i.id) as LoginRow | undefined) : undefined;
   if (own?.data.urls.length) return siteOf({ urls: own.data.urls, name: own.data.name });
-  const login = logins().find((l) => l.data.totpId === i.id) ?? logins().find((l) => !l.data.totpId && matchTotp(l.data, [i.data]));
+  const login = ownerOf(i);
   return siteOf(login?.data.urls.length ? { urls: login.data.urls } : { issuer: i.data.otp.issuer, name: i.data.label });
 }
 
@@ -764,28 +824,31 @@ function codeRow(i: TotpRow, isFf: boolean): HTMLElement {
 }
 
 async function tick() {
+  if (document.hidden) return;   // in the tray or minimized: nothing to paint
   const now = Date.now();
   for (const row of document.querySelectorAll<HTMLElement>(".code-row")) {
     const item = vault?.get(row.dataset.id!);
     const otp = item?.data.type === "totp" ? item.data.otp : item?.data.type === "login" ? item.data.otp : undefined;
     if (!otp) continue;
-    paintCode(row, await totp(otp, now), otp.period, (copiedUntil.get(row.dataset.id!) ?? 0) > now);
+    paintCode(row, await codeAt(otp, now), otp.period, (copiedUntil.get(row.dataset.id!) ?? 0) > now);
   }
-  for (const row of document.querySelectorAll<HTMLElement>(".login[data-login]")) {
+  // Only logins with a code have somewhere to paint it.
+  for (const row of document.querySelectorAll<HTMLElement>(".login[data-login]:has([data-code])")) {
     const item = vault?.get(row.dataset.login!);
     if (!item || item.data.type !== "login") continue;
     const otp = codeFor(item.data);
-    if (otp) paintCode(row, await totp(otp, now), otp.period, (copiedUntil.get(row.dataset.login!) ?? 0) > now);
+    if (otp) paintCode(row, await codeAt(otp, now), otp.period, (copiedUntil.get(row.dataset.login!) ?? 0) > now);
   }
 }
 function paintCode(row: HTMLElement, r: { code: string; remaining: number }, period: number, copied: boolean) {
   const el = row.querySelector<HTMLElement>("[data-code]");
   if (!el) return;
-  el.textContent = copied ? "Copied" : groupCode(r.code);
+  const text = copied ? "Copied" : groupCode(r.code);
+  if (el.textContent !== text) el.textContent = text;
   el.classList.toggle("copied", copied);
   el.classList.toggle("low", !copied && r.remaining <= 5);
   const bar = row.querySelector<HTMLElement>("[data-bar]");
-  if (bar) { bar.style.setProperty("--v", `${(r.remaining / period) * 100}%`); bar.parentElement!.classList.toggle("full", r.remaining <= 5); }
+  if (bar) { bar.style.setProperty("--s", String(r.remaining / period)); bar.parentElement!.classList.toggle("full", r.remaining <= 5); }
 }
 
 // ------------------------------------------------------------------ login editor
@@ -1382,6 +1445,11 @@ setInterval(() => {
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro", secret: "GEZDGNBVGY3TQOJQ" }) });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "Square Enix", account: "maro-alt", secret: "MFRGGZDFMZTWQ2LK" }) });
     vault.add({ type: "totp", otp: normalizeEntry({ issuer: "DigitalOcean", account: "someone.with.a.long.address@example.com", secret: "KRSXG5CTMVRXEZLU" }) });
+    // ?dev&many: a big vault, to check Vault stays quick with hundreds of entries.
+    if (location.search.includes("many")) for (let n = 0; n < 300; n++) {
+      vault.add({ type: "login", name: `Site ${n}`, urls: [`https://site${n}.example`], username: `me${n}`, password: `pw-${n}`, notes: "" });
+      if (n < 120) vault.add({ type: "totp", otp: normalizeEntry({ issuer: `Site ${n * 2}`, account: `me${n}@example.com`, secret: "JBSWY3DPEHPK3PXP" }) });
+    }
     return homeScreen();
   }
   const text = await platform.loadVault();

@@ -31,7 +31,9 @@ label.lab { color: var(--muted); font: 600 12px var(--mono); letter-spacing: 1.2
 .code-row .code.low { color: color-mix(in srgb, var(--accent) 70%, white); }
 .code-row .code.copied, .mini .mono.copied { color: var(--teal); letter-spacing: 1px; }
 .code-row .m-level { grid-column: 1 / -1; height: 3px; margin-right: 6px; }
-.code-row .m-level > i { transition: width 1s linear; }
+/* The countdown bars slide with transform, not width: a width change lays out the whole list, and with
+   a hundred codes ticking every second that kept Vault busy all the time. */
+.code-row .m-level > i, .mini-bar > i { width: 100%; transform: scaleX(var(--s, 0)); transform-origin: left; transition: transform 1s linear; }
 .code-row .actions { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .code-row .auto { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .empty { padding: 48px 0; text-align: center; color: var(--muted); display: grid; gap: 14px; justify-items: center; }
@@ -172,3 +174,6 @@ body:has(.backdrop) { overflow: hidden; }
 
 /* Hourglass Material outlined settings vector. */
 .ecosystem-icon { width: 24px; height: 24px; flex: none; vertical-align: middle; }
+
+/* Rows off screen are skipped until scrolled to (hundreds of logins and codes stay quick). */
+.code-row, .item.login { content-visibility: auto; contain-intrinsic-size: auto 72px; }

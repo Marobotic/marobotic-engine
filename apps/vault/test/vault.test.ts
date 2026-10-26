@@ -71,3 +71,22 @@ test("two devices: newer edits win, deletions travel too", () => {
   assert.equal(pc.get(gone.id), undefined);
   assert.equal(pc.merge(phone.toFile().items), 0);            // nothing new: nothing changes
 });
+
+test("saving seals only the items that changed, and the file still opens with every item", () => {
+  const { vault } = Vault.create("a@b.c", "pw", { kdf: FAST });
+  const a = vault.add({ type: "note", title: "a", body: "1" });
+  const b = vault.add({ type: "note", title: "b", body: "2" });
+  const first = vault.toFile();
+  vault.update(b.id, { type: "note", title: "b", body: "3" });
+  const second = vault.toFile();
+  const box = (f: VaultFile, id: string) => f.items.find((i) => i.id === id)!.box;
+  assert.equal(box(second, a.id), box(first, a.id));       // untouched: the same box again
+  assert.notEqual(box(second, b.id), box(first, b.id));    // changed: sealed anew
+  const again = Vault.unlock(second, "pw");
+  assert.equal((again.get(b.id)!.data as { body: string }).body, "3");
+  assert.equal((again.get(a.id)!.data as { body: string }).body, "1");
+  // Opened from a file, its boxes are reused as they are.
+  assert.equal(box(again.toFile(), a.id), box(second, a.id));
+  vault.remove(a.id);
+  assert.ok(vault.toFile().items.find((i) => i.id === a.id)!.deleted);
+});

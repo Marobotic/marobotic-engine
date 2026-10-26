@@ -38,15 +38,19 @@ export function monogram(name: string): HTMLElement {
 const ICONS = "https://marobotic.dev/vault/icon/";
 
 /** The site's favicon on a light-neutral tile, with the initials tile until (unless) it loads. */
+// Sites found to have no icon this session, so their rows don't ask again every time they're built.
+const noIcon = new Set<string>();
+
 export function entryIcon(name: string, site: string): HTMLElement {
   const tile = monogram(name);
-  if (!site) return tile;
+  if (!site || noIcon.has(site)) return tile;
   const img = new Image();
   img.alt = "";
   img.decoding = "async";
   img.referrerPolicy = "no-referrer";
+  img.onerror = () => noIcon.add(site);
   img.onload = () => {
-    if (img.naturalWidth < 8) return;              // a 1px placeholder is no icon
+    if (img.naturalWidth < 8) { noIcon.add(site); return; }   // a 1px placeholder is no icon
     tile.className = "tile icon";
     tile.style.background = "";
     tile.textContent = "";

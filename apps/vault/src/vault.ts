@@ -38,6 +38,9 @@ const newId = () => crypto.randomUUID();
 export class Vault {
   private items = new Map<string, Item>();
   private gone = new Map<string, number>(); // deleted ids -> when, so a deletion syncs too
+  // Each item's sealed box, kept until the item changes: saving then seals only what changed
+  // (sealing every item on every save made big vaults slow).
+  private boxes = new Map<string, Sealed>();
 
   private constructor(private file: Omit<VaultFile, "items">, private key: Uint8Array, private clock: () => number) {}
 
@@ -82,9 +85,10 @@ export class Vault {
   }
 
   private take(s: SealedItem) {
-    if (s.deleted || !s.box) { this.items.delete(s.id); this.gone.set(s.id, s.updated); return; }
+    if (s.deleted || !s.box) { this.items.delete(s.id); this.boxes.delete(s.id); this.gone.set(s.id, s.updated); return; }
     const data = JSON.parse(openText(this.key, s.box, `item:${s.id}`)) as ItemData;
     this.items.set(s.id, { id: s.id, updated: s.updated, data });
+    this.boxes.set(s.id, s.box);
     this.gone.delete(s.id);
   }
 
@@ -102,15 +106,21 @@ export class Vault {
     if (!this.items.has(id)) throw new Error("no such item");
     const item = { id, updated: this.clock(), data };
     this.items.set(id, item);
+    this.boxes.delete(id);
     return item;
   }
   remove(id: string) {
+    this.boxes.delete(id);
     if (this.items.delete(id)) this.gone.set(id, this.clock());
   }
 
   /** Seal everything for saving or syncing. */
   toFile(): VaultFile {
-    const items: SealedItem[] = [...this.items.values()].map((i) => ({ id: i.id, updated: i.updated, box: seal(this.key, JSON.stringify(i.data), `item:${i.id}`) }));
+    const items: SealedItem[] = [...this.items.values()].map((i) => {
+      let box = this.boxes.get(i.id);
+      if (!box) { box = seal(this.key, JSON.stringify(i.data), `item:${i.id}`); this.boxes.set(i.id, box); }
+      return { id: i.id, updated: i.updated, box };
+    });
     for (const [id, updated] of this.gone) items.push({ id, updated, deleted: true });
     return { ...this.file, items };
   }
