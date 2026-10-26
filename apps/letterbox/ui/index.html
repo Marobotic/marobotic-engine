@@ -56,10 +56,21 @@
       <footer class="side-foot">
         <div id="email" class="faint"></div>
         <div id="sync" class="m-sync" style="--state: var(--faint)">Connecting</div>
-        <button class="m-btn subtle compact" id="signout">&#xf08b; Sign out</button>
+        <div class="foot-btns">
+          <button class="m-btn subtle compact" id="open-settings">&#xf013; Settings</button>
+          <button class="m-btn subtle compact" id="signout">&#xf08b; Sign out</button>
+        </div>
       </footer>
     </aside>
     <main class="main">
+      <section id="welcome" class="view welcome" hidden>
+        <div class="welcome-box">
+          <span class="logo">&#xf0e0;</span>
+          <h1>Bring your mail in</h1>
+          <p>Add your Zoho Mail accounts and Letterbox shows them all in one place: one inbox for everything, and each account's own folders.</p>
+          <button class="m-btn primary" id="welcome-add">&#xf067; Add Zoho account</button>
+        </div>
+      </section>
       <section id="listview" class="view">
         <header class="top">
           <label class="check" title="Select all"><input type="checkbox" id="all"><span></span></label>
@@ -107,6 +118,7 @@
             <div><b id="r-from" dir="auto"></b> <span id="r-addr" class="faint"></span></div>
             <div class="faint" id="r-to" dir="auto"></div>
             <div class="faint" id="r-when"></div>
+            <div class="faint" id="r-account"></div>
           </div>
           <div id="r-files" class="files"></div>
           <div id="r-previews" class="previews"></div>
@@ -116,10 +128,35 @@
     </main>
   </div>
 
+  <div id="settings" class="settings-page" hidden>
+    <header class="sp-head">
+      <button class="m-btn subtle compact sp-back" type="button" id="s-back" title="Back (Esc)" aria-label="Back">&#xf060;</button>
+      <b>Settings</b>
+    </header>
+    <div class="sp-body">
+      <div class="content">
+        <div class="acct">
+          <div class="acct-txt">
+            <b id="s-email"></b>
+            <span>Your marobotic account, the same as Hourglass, Jukebox and Vault. The mail accounts below belong to it, on every device you sign in on.</span>
+            <div class="acct-btns"><button class="m-btn subtle compact" id="s-signout">&#xf08b; Sign out</button></div>
+          </div>
+        </div>
+        <h2 class="m-section">Mail accounts</h2>
+        <div class="settings" id="s-accounts"></div>
+        <div class="add">
+          <button class="m-btn primary" id="s-add">&#xf067; Add Zoho account</button>
+          <span class="faint" id="s-add-note"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="composer" class="overlay" hidden>
     <form class="m-modal compose" id="compose-form" novalidate>
       <header><span id="c-title">New message</span><button type="button" class="m-btn subtle compact" id="c-close" title="Close">&#xf00d;</button></header>
       <div class="content">
+        <div class="line" id="c-fromline" hidden><label for="c-from">From</label><select id="c-from" class="m-field"></select></div>
         <div class="line"><label for="c-to">To</label><input id="c-to" class="m-field" autocomplete="off" placeholder="name@example.com, ..."><button type="button" class="m-btn subtle compact" id="c-ccbtn">Cc/Bcc</button></div>
         <div class="line" id="c-ccline" hidden><label for="c-cc">Cc</label><input id="c-cc" class="m-field" autocomplete="off"></div>
         <div class="line" id="c-bccline" hidden><label for="c-bcc">Bcc</label><input id="c-bcc" class="m-field" autocomplete="off"></div>

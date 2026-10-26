@@ -1,16 +1,26 @@
 // Zoho Mail REST API provider. Works on the Forever Free plan, which has no IMAP or SMTP.
-// Config file: {client_id, client_secret, refresh_token} from a Zoho Self Client (US data center), scopes
-// ZohoMail.accounts.READ, ZohoMail.folders.ALL, ZohoMail.messages.ALL, ZohoMail.tags.ALL.
-import { readFileSync } from "node:fs";
+// Each mailbox is one Zoho sign-in: a refresh token from Letterbox's Server-based client (Zoho API console,
+// multi-DC on), scopes below. Zoho keeps every account in one data centre; its accounts server names it.
 
-const ACCOUNTS = "https://accounts.zoho.com";
-const MAIL = "https://mail.zoho.com";
+export const SCOPES = "ZohoMail.accounts.READ,ZohoMail.folders.ALL,ZohoMail.messages.ALL,ZohoMail.tags.ALL";
+// accounts.zoho.com, .eu, .in, .com.au, .jp, .uk, .sa, .com.cn and accounts.zohocloud.ca. Only these may
+// take a code or a token: the callback's accounts-server comes in on the URL.
+const ACCOUNTS_SERVER = /^https:\/\/accounts\.(zoho\.(com|eu|in|com\.au|jp|uk|sa|com\.cn)|zohocloud\.ca)$/;
+export const accountsServer = (s: string) => (ACCOUNTS_SERVER.test(s) ? s : null);
+// The data centre's Mail API sits next to its accounts server.
+export const mailServer = (accounts: string) => accounts.replace("://accounts.", "://mail.");
+
+/** Letterbox's own Zoho client, plus where Zoho sends people back to. */
+export type ZohoApp = { client_id: string; client_secret: string; redirect_uri: string };
+/** What it takes to open one mailbox. */
+export type ZohoLogin = { client_id: string; client_secret: string; refresh_token: string; accounts?: string; accountId?: string };
 
 export type Folder = { id: string; name: string; type: string; path: string };
 export type Summary = {
   id: string; threadId: string | null; threadCount: number; folderId: string;
   from: string; fromAddress: string; to: string; subject: string; summary: string;
   time: number; unread: boolean; attachment: boolean; flagged: boolean;
+  account?: string;   // which of the person's mailboxes it is in (the server fills it in)
 };
 export type Attachment = { id: string; name: string; size: number };
 export type Message = {
@@ -23,6 +33,7 @@ export type Action = "read" | "unread" | "spam" | "notspam" | "important" | "uni
 
 /** What the server needs from a mailbox; the tests stand in a fake one. */
 export interface Mailbox {
+  mailboxes(): Promise<{ id: string; email: string; name: string }[]>;
   accountInfo(): Promise<{ id: string; email: string; name: string }>;
   folders(): Promise<Folder[]>;
   messages(q: { folderId?: string; unread?: boolean; flagged?: boolean; start?: number; limit?: number }): Promise<Summary[]>;
@@ -78,23 +89,46 @@ const ids = (list: string[]) => {
 };
 const MODES: Record<"read" | "unread" | "spam" | "notspam", string> = { read: "markAsRead", unread: "markAsUnread", spam: "moveToSpam", notspam: "markNotSpam" };
 
+/** Zoho's sign-in page for Letterbox. Zoho sends the person back to redirect_uri with a code and `state`. */
+export function authorizeUrl(app: ZohoApp, state: string): string {
+  const q = new URLSearchParams({ scope: SCOPES, client_id: app.client_id, response_type: "code", access_type: "offline", prompt: "consent", redirect_uri: app.redirect_uri, state });
+  return `https://accounts.zoho.com/oauth/v2/auth?${q}`;
+}
+
+/** Trades the callback's code for a refresh token, at the data centre the account lives in. */
+export async function exchange(app: ZohoApp, code: string, accounts: string): Promise<string> {
+  const q = new URLSearchParams({ grant_type: "authorization_code", client_id: app.client_id, client_secret: app.client_secret, redirect_uri: app.redirect_uri, code });
+  const r = await fetch(`${accounts}/oauth/v2/token?${q}`, { method: "POST", signal: AbortSignal.timeout(15000) });
+  const j = (await r.json().catch(() => ({}))) as { refresh_token?: string; error?: string };
+  if (!j.refresh_token) throw Object.assign(new Error(`Zoho didn't sign you in (${j.error ?? r.status})`), { status: 502 });
+  return j.refresh_token;
+}
+
+/** Ends a refresh token, so a removed account can't be opened with it again. */
+export async function revoke(accounts: string, refreshToken: string): Promise<void> {
+  await fetch(`${accounts}/oauth/v2/token/revoke?${new URLSearchParams({ token: refreshToken })}`, { method: "POST", signal: AbortSignal.timeout(10000) }).catch(() => {});
+}
+
 export class Zoho implements Mailbox {
-  private cfg: { client_id: string; client_secret: string; refresh_token: string };
   private access: string | null = null;
   private expires = 0;
   private account: { id: string; email: string; name: string } | null = null;
+  private readonly accounts: string;
+  private readonly mail: string;
 
-  constructor(configPath: string) {
-    this.cfg = JSON.parse(readFileSync(configPath, "utf8"));
-    if (!this.cfg.refresh_token) throw new Error(`${configPath} has no refresh_token`);
+  constructor(private readonly cfg: ZohoLogin) {
+    if (!cfg.refresh_token) throw new Error("no refresh_token");
+    this.accounts = cfg.accounts ?? "https://accounts.zoho.com";
+    this.mail = mailServer(this.accounts);
   }
 
   private async token(): Promise<string> {
     if (this.access && Date.now() < this.expires) return this.access;
     const q = new URLSearchParams({ client_id: this.cfg.client_id, client_secret: this.cfg.client_secret, refresh_token: this.cfg.refresh_token, grant_type: "refresh_token" });
-    const r = await fetch(`${ACCOUNTS}/oauth/v2/token?${q}`, { method: "POST", signal: AbortSignal.timeout(10000) });
+    const r = await fetch(`${this.accounts}/oauth/v2/token?${q}`, { method: "POST", signal: AbortSignal.timeout(10000) });
     const j = (await r.json()) as { access_token?: string; expires_in?: number; error?: string };
-    if (!j.access_token) throw new Error(`zoho token refresh failed: ${j.error ?? r.status}`);
+    // invalid_code: the token was revoked, or the account removed Letterbox in Zoho's own settings.
+    if (!j.access_token) throw Object.assign(new Error(j.error === "invalid_code" ? "Zoho signed this account out. Remove it and add it again." : `Zoho sign-in failed: ${j.error ?? r.status}`), { status: 502 });
     this.access = j.access_token;
     this.expires = Date.now() + (j.expires_in ?? 3600) * 1000 - 60000;
     return this.access;
@@ -105,7 +139,7 @@ export class Zoho implements Mailbox {
     const headers: Record<string, string> = { authorization: `Zoho-oauthtoken ${await this.token()}`, accept };
     if (typeof body === "string") headers["content-type"] = "application/json";
     else if (body) headers["content-type"] = "application/octet-stream";
-    return fetch(MAIL + path, { method, headers, body: typeof body === "string" || !body ? body : new Uint8Array(body), signal: AbortSignal.timeout(timeout) });
+    return fetch(this.mail + path, { method, headers, body: typeof body === "string" || !body ? body : new Uint8Array(body), signal: AbortSignal.timeout(timeout) });
   }
 
   async api<T = any>(method: string, path: string, body?: string | Buffer, timeout?: number): Promise<T> {
@@ -122,10 +156,19 @@ export class Zoho implements Mailbox {
     return j.data as T;
   }
 
+  /** Every mailbox this Zoho sign-in can open (usually one). */
+  async mailboxes(): Promise<{ id: string; email: string; name: string }[]> {
+    return (await this.api<any[]>("GET", "/api/accounts")).map((a) => ({
+      id: String(a.accountId), email: String(a.primaryEmailAddress ?? a.mailboxAddress ?? "").toLowerCase(), name: a.displayName ?? a.accountDisplayName ?? "",
+    }));
+  }
+
   async accountInfo() {
     if (!this.account) {
-      const a = (await this.api("GET", "/api/accounts"))[0];
-      this.account = { id: String(a.accountId), email: a.primaryEmailAddress ?? a.mailboxAddress, name: a.displayName ?? a.accountDisplayName ?? "" };
+      const all = await this.mailboxes();
+      const a = all.find((x) => x.id === this.cfg.accountId) ?? all[0];
+      if (!a) throw Object.assign(new Error("This Zoho account has no mailbox"), { status: 502 });
+      this.account = a;
     }
     return this.account;
   }

@@ -41,7 +41,42 @@
 .m-nav .badge { margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 700; }
 .nav-sep { height: 1px; margin: 6px 0; background: var(--border); }
 .side-foot { margin-top: auto; display: grid; gap: 6px; padding: 12px 14px 0; border-top: 1px solid var(--border); font-size: 12px; }
-.side-foot .m-btn { justify-self: start; margin-left: -8px; }
+.side-foot .foot-btns { display: flex; flex-wrap: wrap; margin-left: -8px; }
+
+/* each mailbox: its colour, its name over its folders */
+.dot { display: inline-block; flex: none; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: middle; }
+.acct-head { display: flex; align-items: center; min-width: 0; padding: 6px 14px 4px; color: var(--muted); font: 600 12px var(--mono); }
+.acct-head .name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.acct-err { padding: 4px 14px; color: color-mix(in srgb, var(--accent) 60%, white); font-size: 12px; line-height: 1.4; cursor: pointer; }
+
+/* no mailbox yet */
+.welcome { align-items: center; justify-content: center; padding: 24px; }
+.welcome-box { max-width: 420px; display: grid; justify-items: center; gap: 12px; text-align: center; }
+.welcome-box .logo { color: var(--accent); font-size: 40px; }
+.welcome-box h1 { margin: 0; font: 700 20px var(--mono); }
+.welcome-box p { margin: 0 0 6px; color: var(--muted); line-height: 1.5; }
+
+/* settings: a page of its own over the mail, like Vault's */
+.settings-page { position: fixed; inset: 0; z-index: 8; display: flex; flex-direction: column; background: var(--bg); }
+.settings-page[hidden] { display: none; }
+.sp-head { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 0 max(16px, calc((100vw - 760px) / 2 + 16px)); border-bottom: 1px solid var(--border); font: 700 17px var(--mono); }
+.sp-back { width: 36px; height: 36px; padding: 0; justify-content: center; }
+.sp-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sp-body > .content { max-width: 760px; margin: 0 auto; padding: 8px 24px 40px; }
+.acct { display: flex; align-items: center; gap: 18px; padding: 18px 0 20px; }
+.acct-txt { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.acct-txt > b { font: 700 16px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-txt > span { color: var(--muted); font: 13px/1.45 var(--sans); }
+.acct-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; margin-left: -8px; }
+.sp-body .m-section { margin: 8px 0 4px; }
+.settings .set { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.settings .set:first-child { border-top: 0; }
+.settings .set > div { flex: 1; min-width: 0; }
+.settings .set b { display: flex; align-items: center; font-size: 14px; overflow-wrap: anywhere; }
+.settings .set span { display: block; color: var(--muted); font: 12px/1.45 var(--sans); overflow-wrap: anywhere; }
+.settings .set span.bad { color: color-mix(in srgb, var(--accent) 60%, white); }
+.settings .set.none { color: var(--muted); font-size: 14px; }
+.sp-body .add { display: grid; justify-items: start; gap: 8px; padding: 16px 0 0; border-top: 1px solid var(--border); font: 12px/1.45 var(--sans); }
 
 /* main column */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -165,7 +200,14 @@ a.file:hover { border-color: var(--fg); }
   .app:has(#reader:not([hidden])) .compose-btn { display: none; } /* reading has Reply; the button would sit on the mail */
   #folders { flex-direction: row; overflow-x: auto; padding-bottom: 8px; }
   .m-nav, .m-nav.sub { flex: none; padding: 0 12px; font-size: 13px; }
-  .side-foot { display: none; }
+  /* phones keep only the buttons: Settings and Sign out */
+  .side-foot { display: flex; padding: 0 0 8px; border-top: 0; }
+  .side-foot #email, .side-foot #sync { display: none; }
+  .acct-head { flex: none; padding: 0 4px 0 8px; }
+  .nav-sep { flex: none; width: 1px; height: auto; margin: 4px 4px; }
+  .acct-err { flex: none; }
+  .sp-head { padding: 0 10px; }
+  .sp-body > .content { padding: 4px 16px 28px; }
   .top { padding: 14px 16px 4px 28px; flex-wrap: wrap; row-gap: 8px; }
   .search { order: 3; flex: 1 0 100%; }
   .list { padding: 0 16px 70px; }
