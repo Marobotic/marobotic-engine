@@ -390,17 +390,18 @@ async function copy(text: string, said: string, clearAfter = 0): Promise<boolean
 
 const myEmail = () => file?.email || localStorage.getItem("vault.email") || "";
 let picShown: Promise<string | null> | null = null;   // the account picture, looked up once per change
-/** The account's picture in `node`, or its initial until (or unless) there is one. */
-function showMe(node: HTMLElement) {
+/** The account's picture in `node`, or its initial until (or unless) there is one; true when there is. */
+function showMe(node: HTMLElement): Promise<boolean> {
   const email = myEmail();
   node.textContent = (email[0] || "?").toUpperCase();
   picShown ??= account.pictureOf(email);
-  void picShown.then((url) => {
-    if (!url) return;
+  return picShown.then((url) => {
+    if (!url) return false;
     const img = new Image();
     img.alt = "";
     img.src = url;
     node.replaceChildren(img);
+    return true;
   });
 }
 
@@ -420,7 +421,7 @@ function homeScreen() {
     <div id="list"></div>`));
   $("#settings").onclick = () => settingsModal();
   $("#me").onclick = () => settingsModal();
-  showMe($("#me"));
+  void showMe($("#me"));
   $("#import").onclick = () => (filter === "totp" ? addCodeModal() : importModal());
   const seg = $("#filter");
   for (const [v, label] of [["totp", "2FA codes"], ["login", "Passwords"]] as const) {
@@ -560,21 +561,28 @@ function setupModal() {
 // ------------------------------------------------------------------ settings
 const lockLabel = (m: number) => (!m ? "Never" : m >= 1440 ? "After a day" : m >= 60 ? `After ${m / 60} hour${m === 60 ? "" : "s"}` : `After ${m} min`);
 
+/** Settings: a page of its own over the list (back, Esc or Android's back leave it), not a window. */
 function settingsModal() {
+  if (document.querySelector(".settings-page")) return;
   const back = h(`
-    <div class="backdrop">
-      <div class="m-modal modal settings">
-        <header>Settings <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
+    <div class="settings-page">
+      <header class="sp-head">
+        <button class="m-btn subtle compact sp-back" type="button" data-close title="Back" aria-label="Back"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7"/></svg></button>
+        <b>Settings</b>
+      </header>
+      <div class="settings sp-body">
         <div class="content">
-          <div class="set">
-            <div><b>Account</b><span>${esc([myEmail(), session ? "" : "offline"].filter(Boolean).join(" · "))}</span></div>
-            <button class="m-btn compact" id="lockNow">Lock now</button>
-          </div>
-          <div class="set">
-            <span class="me lg" id="mePic"></span>
-            <div><b>Picture</b><span>Shown in every marobotic app: Vault, Tasks, Dock and the rest.</span></div>
-            <button class="m-btn compact" id="picSet"${session ? "" : " disabled"}>Change</button>
-            <button class="m-btn subtle compact" id="picDel"${session ? "" : " disabled"}>Remove</button>
+          <div class="acct">
+            <span class="me xl" id="mePic"></span>
+            <div class="acct-txt">
+              <b>${esc(myEmail())}</b>
+              <span>${session ? "Your marobotic account. Its picture shows in Vault, Tasks and every other app." : "Offline: changes stay on this device until Vault reaches marobotic.dev."}</span>
+              <div class="acct-btns">
+                <button class="m-btn compact" id="picSet"${session ? "" : " disabled"}>Change picture</button>
+                <button class="m-btn subtle compact" id="picDel" hidden>Remove</button>
+                <button class="m-btn compact" id="lockNow">Lock now</button>
+              </div>
+            </div>
             <input type="file" id="picFile" accept="image/*" hidden>
           </div>
           <div class="set">
@@ -622,7 +630,6 @@ function settingsModal() {
   document.body.append(back);
   const close = () => back.remove();
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
-  back.onclick = (e) => { if (e.target === back) close(); };
   const qs = $("#quickSw", back);
   if (qs) qs.onclick = async () => {
     if (qs.classList.contains("on")) { platform.quickUnlock.clear(); qs.classList.remove("on"); return toast("Quick unlock is off"); }
@@ -683,15 +690,17 @@ function settingsModal() {
     toast(lockAfterMin ? `Vault locks after ${lockLabel(lockAfterMin).replace("After ", "")} without use` : "Vault stays open until you quit or lock it");
   };
   $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin"); };
-  showMe($("#mePic", back));
+  const picDel = $("#picDel", back);
+  const showPic = () => void showMe($("#mePic", back)).then((has) => { picDel.hidden = !has || !session; });
+  showPic();
   const picFile = $<HTMLInputElement>("#picFile", back);
   const putPic = async (image: Blob | null) => {
     if (!session) return toast("Connect to marobotic.dev to change your picture");
     try {
       await account.setPicture(session, image);
       picShown = account.pictureOf(myEmail(), true);
-      showMe($("#mePic", back));
-      if ($("#me")) showMe($("#me"));
+      showPic();
+      if ($("#me")) void showMe($("#me"));
       toast(image ? "Picture saved; other apps show it within a few minutes" : "Picture removed");
     } catch (e) { toast((e as Error).message); }
   };
@@ -1511,6 +1520,8 @@ function goBack(): boolean {
   const tops = document.querySelectorAll<HTMLElement>(".backdrop");
   const top = tops[tops.length - 1];
   if (top) { top.click(); return true; }   // every window closes on a tap outside it, the same as Cancel
+  const page = document.querySelector<HTMLElement>(".settings-page");
+  if (page) { page.remove(); return true; }
   if (!vault) {
     if (document.querySelector(".signin #flip") && !document.querySelector(".switch [data-mode=signin].on")) { signInScreen(); return true; }
     return false;
@@ -1522,7 +1533,7 @@ function goBack(): boolean {
 (globalThis as { vaultBack?: () => boolean }).vaultBack = goBack;
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || e.defaultPrevented) return;
-  if (document.querySelector(".camera, .menu-backdrop, .backdrop") && goBack()) e.preventDefault();
+  if (document.querySelector(".camera, .menu-backdrop, .backdrop, .settings-page") && goBack()) e.preventDefault();
 });
 
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
