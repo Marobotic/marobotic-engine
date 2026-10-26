@@ -23,7 +23,7 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = 
 const app = $("#app");
 /** "this phone" or "this PC", for messages about the copy kept here. */
 const here = platform.isMobile ? "this phone" : "this PC";
-const LOCK_CHOICES = [0, 5, 15, 30, 60, 240, 1440];   // minutes; 0 = never
+const LOCK_CHOICES = platform.isAndroid ? [0] : [0, 5, 15, 30, 60, 240, 1440];   // Android stays open until restart; 0 = never
 
 let vault: Vault | null = null;
 let file: VaultFile | null = null;      // the sealed copy on this PC (null before the first sign-in here)
@@ -32,7 +32,7 @@ let rev = 0;                            // the server version this vault is base
 let syncing: Promise<void> | null = null;
 let query = "";
 let lastActive = Date.now();
-let lockAfterMin = Number(localStorage.getItem("vault.lockAfterMin")) || 0;   // off unless chosen in Settings
+let lockAfterMin = platform.isAndroid ? 0 : Number(localStorage.getItem("vault.lockAfterMin")) || 0;
 let autoXlId = localStorage.getItem("vault.autoXlId") || "";                 // the one FFXIV account auto-sent
 let xlRun: AbortController | null = null;
 let filter: "totp" | "login" = "totp";
@@ -125,8 +125,8 @@ function pixelLock(cell = 7): string {
 let signedInWith: { email: string; password: string } | null = null;   // only to turn on quick unlock this session
 
 /** Signed out (or locked): sign in, create an account, or get a reset link - the same screen as
- *  Hourglass and Jukebox. On a phone with quick unlock on, the fingerprint prompt comes up first. */
-function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "signin", tryQuick = true) {
+ *  Hourglass and Jukebox. On a phone with quick unlock on, offer an explicit biometric login button. */
+function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "signin") {
   vault = null;
   session = null;
   signedInWith = null;
@@ -151,16 +151,16 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
         ${forgot ? "" : `<div class="hint">${create ? "At least 8 characters. Your vault is sealed with it on your devices; the server only ever keeps the sealed copy." : "The same account as Hourglass and Jukebox."}</div>`}
         <div class="notice" id="notice"></div>
         <div class="err" id="err">${esc(message)}</div>
-        ${quick ? `<button class="m-btn primary" type="button" id="quick">&#xf023; Unlock with ${platform.quickUnlock.label}</button>` : ""}
+        ${quick ? `<button class="m-btn primary" type="button" id="quick">Login using biometrics</button>` : ""}
         <button class="m-btn ${quick ? "" : "primary"}" type="submit">${forgot ? "Send reset link" : create ? "Create account" : "Sign in"}</button>
       </form>
       <div class="other">${forgot ? "Remembered it? " : create ? "Already have an account? " : "New here? "}<a href="#" id="flip">${forgot || create ? "Sign in" : "Create an account"}</a></div>
     </div>`));
   const form = $<HTMLFormElement>("form", app);
   const err = (t: string) => { $("#err").textContent = t; $("#notice").textContent = ""; };
-  app.querySelectorAll<HTMLElement>("[data-mode]").forEach((b) => (b.onclick = () => signInScreen("", b.dataset.mode as "signin" | "create", false)));
-  $("#toForgot")?.addEventListener("click", (e) => { e.preventDefault(); signInScreen("", "forgot", false); });
-  $("#flip").onclick = (e) => { e.preventDefault(); signInScreen("", forgot || create ? "signin" : "create", false); };
+  app.querySelectorAll<HTMLElement>("[data-mode]").forEach((b) => (b.onclick = () => signInScreen("", b.dataset.mode as "signin" | "create")));
+  $("#toForgot")?.addEventListener("click", (e) => { e.preventDefault(); signInScreen("", "forgot"); });
+  $("#flip").onclick = (e) => { e.preventDefault(); signInScreen("", forgot || create ? "signin" : "create"); };
   if (!platform.isMobile) $<HTMLInputElement>(last && !forgot ? "#pw" : "#em").focus();
 
   const quickUnlock = async () => {
@@ -171,15 +171,14 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
       return;
     }
     const b = $<HTMLButtonElement>("#quick");
-    if (b) { b.disabled = true; b.textContent = "Opening…"; }
+    if (b) { b.disabled = true; b.textContent = "Waiting for biometric…"; }
     try { await openAccount(r.email, r.password); }
     catch (e) {
-      if (e instanceof account.SignInError) { platform.quickUnlock.clear(); signInScreen("Your password changed. Sign in with the new one to turn quick unlock on again.", "signin", false); }
-      else { if (b) { b.disabled = false; b.innerHTML = `&#xf023; Unlock with ${platform.quickUnlock.label}`; } err((e as Error).message); }
+      if (e instanceof account.SignInError) { platform.quickUnlock.clear(); signInScreen("Your password changed. Sign in with the new one to turn quick unlock on again."); }
+      else { if (b) { b.disabled = false; b.textContent = "Login using biometrics"; } err((e as Error).message); }
     }
   };
   $("#quick")?.addEventListener("click", () => void quickUnlock());
-  if (quick && tryQuick) void quickUnlock();
 
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -473,7 +472,7 @@ function settingsModal() {
             <button class="m-btn compact" id="lockNow">Lock now</button>
           </div>
           <div class="set">
-            <div><b>Lock automatically</b><span>Sign out of Vault after this long without use.${platform.isMobile ? "" : " Closing the window keeps Vault open in the tray; Quit from the tray icon locks it."}</span></div>
+            <div><b>Lock automatically</b><span>${platform.isAndroid ? "On Android, Vault stays unlocked until the app process ends or you lock it manually." : `Sign out of Vault after this long without use.${platform.isMobile ? "" : " Closing the window keeps Vault open in the tray; Quit from the tray icon locks it."}`}</span></div>
             <select class="m-field" id="lockAfter">${LOCK_CHOICES.map((m) => `<option value="${m}" ${m === lockAfterMin ? "selected" : ""}>${lockLabel(m)}</option>`).join("")}</select>
           </div>
           <div class="set">
@@ -507,7 +506,7 @@ function settingsModal() {
           </div>` : ""}
           ${platform.quickUnlock.state() !== "unavailable" ? `
           <div class="set">
-            <div><b>Unlock with ${platform.quickUnlock.label}</b><span>Your password is sealed by the phone and only opens after your fingerprint, face or the phone's PIN.</span></div>
+            <div><b>Biometric login</b><span>Your password is sealed by the phone and only opens after your fingerprint, face or the phone's PIN.</span></div>
             <span class="m-switch ${platform.quickUnlock.state() === "saved" ? "on" : ""}" id="quickSw" role="switch" tabindex="0"></span>
           </div>` : ""}
         </div>
@@ -575,7 +574,7 @@ function settingsModal() {
     localStorage.setItem("vault.lockAfterMin", String(lockAfterMin));
     toast(lockAfterMin ? `Vault locks after ${lockLabel(lockAfterMin).replace("After ", "")} without use` : "Vault stays open until you quit or lock it");
   };
-  $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin", false); };
+  $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin"); };
   $("#kit", back).onclick = async () => {
     if (!(await ask("Make a new recovery kit? Your current one stops working, so write the new one down right away."))) return;
     const code = vault!.newRecoveryKit();
@@ -1364,10 +1363,9 @@ if (platform.hasAutofill) { setInterval(() => void takeAndroidSaves(), 2000); ad
 if (platform.isDesktopApp) void platform.setLinkHandler(linksOn).catch(() => {});
 
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
-// Back in the app while it's locked: the fingerprint prompt comes up by itself.
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") $("#quick")?.click(); });
+// A user explicitly starts biometric sign-in. Do not pop a prompt on each Android foreground event.
 setInterval(() => {
-  if (vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`, "signin", false);
+  if (!platform.isAndroid && vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`, "signin");
   else if (vault) tick();
 }, 1000);
 

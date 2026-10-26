@@ -1,8 +1,6 @@
 package dev.marobotic.vault
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
@@ -40,8 +38,6 @@ object AutofillStore {
     private val saves = mutableListOf<Save>()
     private val madePasskeys = mutableListOf<JSONObject>()
     val onUnlock = CopyOnWriteArrayList<() -> Unit>()
-    private val main = Handler(Looper.getMainLooper())
-    private val relock = Runnable { index = null }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("vault.autofill", Context.MODE_PRIVATE)
 
@@ -69,21 +65,18 @@ object AutofillStore {
     /** From Vault's window: the vault is open. Kept in memory, and the hints + sealed copy are refreshed. */
     fun set(ctx: Context, json: String) {
         val wasLocked = index == null
-        main.removeCallbacks(relock)
         index = withMade(parse(JSONObject(json), secrets = true))
         synchronized(picked) { if (prefs(ctx).getString("picked", null) == null) picked.clear() }   // counted in the vault now
         remember(ctx, json)
         if (wasLocked) onUnlock.forEach { it() }
     }
 
-    /** After a fingerprint opened the sealed copy: usable for a few minutes, then locked again. */
+    /** After a fingerprint opened the sealed copy, keep it in memory until the process ends or Vault is locked. */
     fun openSealed(json: String) {
         index = withMade(parse(JSONObject(json), secrets = true))
-        main.removeCallbacks(relock)
-        main.postDelayed(relock, 5 * 60_000L)
     }
 
-    fun clear() { main.removeCallbacks(relock); index = null }
+    fun clear() { index = null }
 
     /** Names, usernames and sites (no secrets), for suggestions while the vault is locked. */
     fun hints(ctx: Context): Index? {

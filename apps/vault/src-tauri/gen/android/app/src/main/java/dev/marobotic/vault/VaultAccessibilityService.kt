@@ -41,6 +41,9 @@ class VaultAccessibilityService : AccessibilityService() {
     private var overlay: View? = null
     private var field: AccessibilityNodeInfo? = null
     private var fieldKey = ""
+    private var focusedFieldKey = ""
+    /** Once typing starts in a field, keep suggestions away until focus moves to another field. */
+    private var typedFieldKey = ""
     /** A field picked from just now: the list stays away until another field or screen. */
     private var doneWith = ""
     private var pending: Runnable? = null
@@ -57,7 +60,11 @@ class VaultAccessibilityService : AccessibilityService() {
         if (pkg == packageName || pkg == "com.android.systemui") return
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (!isImePackage(pkg)) doneWith = ""
+                if (!isImePackage(pkg)) {
+                    doneWith = ""
+                    focusedFieldKey = ""
+                    typedFieldKey = ""
+                }
                 later(120) { refresh() }
             }
             AccessibilityEvent.TYPE_VIEW_FOCUSED, AccessibilityEvent.TYPE_VIEW_CLICKED -> {
@@ -65,13 +72,22 @@ class VaultAccessibilityService : AccessibilityService() {
                 // Focus left the field: wait a moment, as React Native apps hand it straight back.
                 if (!n.isEditable) return later(200) { refresh() }
                 val key = keyOf(n)
+                if (key != focusedFieldKey) {
+                    focusedFieldKey = key
+                    typedFieldKey = ""
+                }
                 if (e.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED || key != fieldKey) { if (key == doneWith) doneWith = "" }
                 pending?.let { main.removeCallbacks(it); pending = null }
                 consider(n)   // at once: the list is there when the field is
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 val n = e.source ?: return
-                if (keyOf(n) == fieldKey) later(60) { consider(n) }
+                if (!n.isEditable) return
+                val key = keyOf(n)
+                typedFieldKey = key
+                // Typing is an explicit dismissal. Do not re-run consider() from text-change events;
+                // that was reopening the suggestion over the keyboard as each character arrived.
+                if (key == fieldKey || key == focusedFieldKey) hide()
             }
             // The keyboard opened or closed: the list moves to fit.
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> if (overlay != null) later(60) { field?.let { consider(it) } }
@@ -99,6 +115,11 @@ class VaultAccessibilityService : AccessibilityService() {
         val pkg = node.packageName?.toString() ?: return hide()
         val key = keyOf(node)
         if (key == doneWith) return hide()
+        if (key == typedFieldKey) return hide()
+        if (!node.isShowingHintSafe() && !node.text?.toString().isNullOrEmpty()) {
+            typedFieldKey = key
+            return hide()
+        }
         val form = Form.of(node) ?: return hide()
         val browser = isBrowser(pkg)
         // In a browser, the site is what its address bar shows (the page can't write there).

@@ -31,6 +31,7 @@ class Fields(structure: AssistStructure, ownPackage: String) {
     var otp: AutofillId? = null
     var webDomain: String? = null
     var focused: AutofillId? = null
+    var focusedHasText = false
     val pkg: String = structure.activityComponent.packageName
     var usernameValue = ""
     /** The sign-in name field asks for an email ("Email or Phone Number", type=email, an email keyboard). */
@@ -59,7 +60,10 @@ class Fields(structure: AssistStructure, ownPackage: String) {
         if (n.autofillId != null && (n.className?.contains("EditText") == true || n.htmlInfo?.tag.equals("input", true) || n.autofillHints != null))
             seen.append("\n  ${n.className?.substringAfterLast('.')} type=${n.autofillType} vis=${n.visibility} input=0x${Integer.toHexString(n.inputType)} hints=${n.autofillHints?.joinToString()} id=${n.idEntry} hint=${n.hint} html=${n.htmlInfo?.attributes?.joinToString { "${it.first}=${it.second}" }?.take(160)}")
         if (n.autofillId != null && n.autofillType == View.AUTOFILL_TYPE_TEXT && n.visibility == View.VISIBLE) {
-            if (n.isFocused) focused = n.autofillId
+            if (n.isFocused) {
+                focused = n.autofillId
+                focusedHasText = n.autofillValue?.takeIf { it.isText }?.textValue?.isNotEmpty() == true
+            }
             classify(n)
         }
         for (i in 0 until n.childCount) visit(n.getChildAt(i))
@@ -128,7 +132,7 @@ class VaultAutofillService : AutofillService() {
         // codes in browsers; Android's list keeps the rest, and still offers to save new logins.
         val overlay = VaultAccessibilityService.instance != null
         if (overlay) fields.otp = null
-        val response = if (fields.own || !fields.any) null else respond(this, fields, inline, listed = !(overlay && fields.webDomain == null))
+        val response = if (fields.own || !fields.any || fields.focusedHasText) null else respond(this, fields, inline, listed = !(overlay && fields.webDomain == null))
         android.util.Log.i("VaultAutofill", "fill ${fields.pkg} web=${fields.webDomain} user=${fields.username != null} pw=${fields.password != null} new=${fields.newPasswords.size} otp=${fields.otp != null} " +
             "locked=${AutofillStore.index == null} logins=${(AutofillStore.index ?: AutofillStore.hints(this))?.let { with(AutofillStore) { it.loginsFor(fields.webDomain, fields.pkg).size } }} answered=${response != null} overlay=$overlay inline=${inline != null}${fields.seen}")
         callback.onSuccess(response)
