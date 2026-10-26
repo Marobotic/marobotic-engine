@@ -5,7 +5,7 @@
 export const SCOPES = "ZohoMail.accounts.READ,ZohoMail.folders.ALL,ZohoMail.messages.ALL,ZohoMail.tags.ALL";
 // accounts.zoho.com, .eu, .in, .com.au, .jp, .uk, .sa, .ae, .sg, .com.cn and accounts.zohocloud.ca. Only these may
 // take a code or a token: the callback's accounts-server comes in on the URL.
-const ACCOUNTS_SERVER = /^https:\/\/accounts\.(zoho.(com|eu|in|com.au|jp|uk|sa|ae|sg|com.cn)|zohocloud.ca)$/;
+const ACCOUNTS_SERVER = /^https:\/\/accounts\.(zoho\.(com|eu|in|com\.au|jp|uk|sa|ae|sg|com\.cn)|zohocloud\.ca)$/;
 export const accountsServer = (s: string) => (ACCOUNTS_SERVER.test(s) ? s : null);
 // The data centre's Mail API sits next to its accounts server.
 export const mailServer = (accounts: string) => accounts.replace("://accounts.", "://mail.");
