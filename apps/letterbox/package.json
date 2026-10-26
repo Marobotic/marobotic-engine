@@ -1,11 +1,16 @@
 {
   "name": "@marobotic/letterbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Letterbox: Marobotic's mail client on a Zoho mailbox.",
   "scripts": {
     "build:ui": "node build.mjs",
-    "serve": "node --import tsx server/server.ts"
+    "serve": "node --import tsx server/server.ts",
+    "tauri": "tauri",
+    "app": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
   }
 }

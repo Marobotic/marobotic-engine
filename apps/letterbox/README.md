@@ -14,9 +14,18 @@ deleting from Trash or Spam removes the mail for good.
 
 ```
 server/zoho.ts     the Zoho provider (token refresh, list, read, flags, delete, upload, send)
-server/server.ts   HTTP API + the built page; sign-in via maro-cache, session in an HttpOnly cookie
-ui/                the web client (Marochy kit from packages/ui), bundled by build.mjs into dist/
+server/server.ts   HTTP API + the built page; sign-in via maro-cache (cookie on web, Bearer in the app)
+ui/                the client (Marochy kit from packages/ui), bundled by build.mjs into dist/
+src-tauri/         the Windows desktop app (Rust + Tauri 2: tray, single-instance, saved session, Downloads)
+icons.py           draws the pixel envelope icon set into src-tauri/icons/
+installer/         standalone Windows uninstaller (Inno Setup 6)
 deploy.sh          build, back up /opt/marobotic-letterbox, upload, pm2 restart
+```
+
+Build the Windows app (`Letterbox_0.1.1_x64-setup.exe`):
+
+```powershell
+npx tauri build
 ```
 
 Run it locally:

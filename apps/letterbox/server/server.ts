@@ -7,6 +7,7 @@
 //   GET  /api/me                                        -> { email, mailbox }
 //   GET  /api/folders
 //   GET  /api/messages?folder=<id>|unread&start&limit
+//   GET  /api/search?q=&start&limit                    -> matching mail from every folder
 //   GET  /api/message?folder=&id=                       -> headers, html body, attachments
 //   GET  /api/attachment?folder=&id=&att=&name=         -> the file
 //   POST /api/actions {action: read|unread|spam|notspam|delete, items: [{id, folder}]}
@@ -31,7 +32,7 @@ const TYPES: Record<string, string> = { html: "text/html; charset=utf-8", js: "t
 // The message iframe (srcdoc) inherits this policy, so mail may load images, styles and fonts from the web;
 // scripts only ever come from here, and the mail itself runs in a script-less sandbox.
 const CSP = "default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline' https:; font-src 'self' https: data:; media-src https: data:; frame-ancestors 'none'; form-action 'self'";
-const ACTIONS = new Set(["read", "unread", "spam", "notspam", "delete"]);
+const ACTIONS = new Set(["read", "unread", "spam", "notspam", "important", "unimportant", "delete"]);
 const ADDRESS = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
@@ -57,6 +58,8 @@ export function textToHtml(text: string): string {
   return `<div style="font-family: sans-serif; white-space: pre-wrap">${esc.replace(/\r?\n/g, "<br>")}</div>`;
 }
 
+const ORIGINS = new Set(["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", "http://127.0.0.1:8970"]);
+
 export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string; users: string[]; webDir: string; cookiePath?: string; secure?: boolean }) {
   const { mail, accountUrl, webDir, cookiePath = "/", secure = true } = opts;
   const users = new Set(opts.users.map((u) => u.trim().toLowerCase()).filter(Boolean));
@@ -69,12 +72,17 @@ export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string;
     }
     return "";
   }
+  function sessionOf(req: IncomingMessage): string {
+    const auth = req.headers.authorization ?? "";
+    if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+    return cookieOf(req);
+  }
   const setCookie = (value: string, maxAge: number) =>
     `${COOKIE}=${encodeURIComponent(value)}; Path=${cookiePath}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 
   /** The signed-in account's email, when it is one of the allowed users. */
   async function who(req: IncomingMessage): Promise<string> {
-    const session = cookieOf(req);
+    const session = sessionOf(req);
     if (!session) throw fail(401, "Sign in");
     const k = sha(session);
     const hit = sessions.get(k);
@@ -130,14 +138,19 @@ export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string;
   }
 
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const origin = String(req.headers.origin ?? "");
+    const cors: Record<string, string> = ORIGINS.has(origin)
+      ? { "access-control-allow-origin": origin, "access-control-allow-headers": "authorization, content-type, x-letterbox", "access-control-allow-methods": "GET, POST, OPTIONS", vary: "origin" }
+      : {};
     const send = (status: number, obj: unknown, headers: Record<string, string> = {}) => {
-      res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers });
+      res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...cors, ...headers });
       res.end(JSON.stringify(obj));
     };
     const url = new URL(req.url ?? "/", "http://x");
     const path = url.pathname;
     const q = (k: string) => url.searchParams.get(k) ?? "";
     try {
+      if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
       if (path === "/health") return send(200, { ok: true });
       if ((req.method === "GET" || req.method === "HEAD") && !path.startsWith("/api/") && !path.startsWith("/auth/")) {
         if (await serveStatic(path, res)) return;
@@ -146,20 +159,28 @@ export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string;
       const writing = req.method !== "GET" && req.method !== "HEAD";
       if (writing && req.headers["x-letterbox"] !== "1") return send(403, { error: "missing x-letterbox header" });
 
-      if (path === "/auth/login" && req.method === "POST") {
+      if ((path === "/auth/login" || path === "/auth/register") && req.method === "POST") {
         const body = await json<{ email?: string; password?: string }>(req);
         const email = String(body.email ?? "").trim().toLowerCase(), password = body.password;
         if (!users.has(email)) return send(403, { error: "This marobotic account has no mailbox here" });
-        const r = await fetch(`${accountUrl}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }), signal: AbortSignal.timeout(15000) });
+        const r = await fetch(`${accountUrl}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }), signal: AbortSignal.timeout(15000) });
         const out = (await r.json().catch(() => ({}))) as { session?: string; account?: { email?: string }; error?: string; retryIn?: number };
         if (!r.ok || !out.session) return send(r.status >= 500 ? 503 : 401, { error: out.error || "That email and password don't match a marobotic account.", retryIn: out.retryIn });
         const got = String(out.account?.email ?? email).toLowerCase();
         if (!users.has(got)) return send(403, { error: "This marobotic account has no mailbox here" });
         sessions.set(sha(out.session), { email: got, until: Date.now() + 10 * 60_000 });
-        return send(200, { ok: true }, { "set-cookie": setCookie(out.session, 30 * 86400) });
+        return send(200, { ok: true, session: out.session, email: got }, { "set-cookie": setCookie(out.session, 30 * 86400) });
+      }
+      if (path === "/auth/forgot" && req.method === "POST") {
+        const body = await json<{ email?: string; app?: string }>(req);
+        const email = String(body.email ?? "").trim().toLowerCase();
+        const r = await fetch(`${accountUrl}/auth/forgot`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, app: body.app || "music" }), signal: AbortSignal.timeout(15000) });
+        const out = (await r.json().catch(() => ({}))) as { error?: string };
+        if (!r.ok) return send(r.status >= 500 ? 503 : r.status, { error: out.error || "That didn't work. Try again in a minute." });
+        return send(200, { ok: true });
       }
       if (path === "/auth/logout" && req.method === "POST") {
-        const s = cookieOf(req);
+        const s = sessionOf(req);
         if (s) sessions.delete(sha(s));
         return send(200, { ok: true }, { "set-cookie": setCookie("", 0) });
       }
@@ -171,10 +192,18 @@ export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string;
       if (path === "/api/folders" && req.method === "GET") return send(200, await mail.folders());
       if (path === "/api/messages" && req.method === "GET") {
         const folder = q("folder");
-        if (folder !== "unread" && !ID.test(folder)) return send(400, { error: "folder is required" });
+        if (folder !== "unread" && folder !== "important" && !ID.test(folder)) return send(400, { error: "folder is required" });
         const start = Math.max(1, Number(q("start")) || 1);
         const limit = Math.min(200, Math.max(1, Number(q("limit")) || 50));
-        return send(200, await mail.messages({ ...(folder === "unread" ? { unread: true } : { folderId: folder }), start, limit }));
+        const filter = folder === "unread" ? { unread: true } : folder === "important" ? { flagged: true } : { folderId: folder };
+        return send(200, await mail.messages({ ...filter, start, limit }));
+      }
+      if (path === "/api/search" && req.method === "GET") {
+        const text = q("q").trim().slice(0, 300);
+        if (!text) return send(400, { error: "What should I search for?" });
+        const start = Math.max(1, Number(q("start")) || 1);
+        const limit = Math.min(200, Math.max(1, Number(q("limit")) || 50));
+        return send(200, await mail.search(text, start, limit));
       }
       if (path === "/api/message" && req.method === "GET") return send(200, await mail.message(q("folder"), q("id")));
       if (path === "/api/attachment" && req.method === "GET") {
@@ -186,6 +215,7 @@ export function createLetterboxServer(opts: { mail: Mailbox; accountUrl: string;
           "content-disposition": `attachment; filename="${name.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
           "cache-control": "private, no-store",
           "x-content-type-options": "nosniff",
+          ...cors,
         });
         for await (const chunk of r.body as unknown as AsyncIterable<Uint8Array>) res.write(chunk);
         return res.end();

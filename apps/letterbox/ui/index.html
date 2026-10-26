@@ -11,16 +11,42 @@
   <link rel="stylesheet" href="letterbox.css">
 </head>
 <body>
-  <form id="gate" class="gate m-modal" hidden>
-    <header><span><span class="logo">&#xf0e0;</span> Letterbox</span></header>
-    <div class="sub">Sign in with your marobotic account.</div>
-    <div class="content">
-      <label class="lab" for="em">Email</label><input id="em" class="m-field" type="email" autocomplete="username" required>
-      <label class="lab" for="pw">Password</label><input id="pw" class="m-field" type="password" autocomplete="current-password" required>
-      <div id="gate-error" class="error-text" hidden></div>
-    </div>
-    <footer><button class="m-btn primary" id="signin">Sign in</button></footer>
-  </form>
+  <div id="gate" class="signin" hidden>
+    <svg class="pixel" width="63" height="49" viewBox="0 0 63 49" aria-hidden="true">
+      <rect x="0" y="0" width="63" height="7" fill="var(--accent)"/>
+      <rect x="0" y="7" width="7" height="35" fill="var(--accent)"/>
+      <rect x="56" y="7" width="7" height="35" fill="var(--accent)"/>
+      <rect x="0" y="42" width="63" height="7" fill="var(--accent)"/>
+      <rect x="7" y="7" width="7" height="7" fill="var(--gold)"/>
+      <rect x="49" y="7" width="7" height="7" fill="var(--gold)"/>
+      <rect x="14" y="14" width="7" height="7" fill="var(--gold)"/>
+      <rect x="42" y="14" width="7" height="7" fill="var(--gold)"/>
+      <rect x="21" y="21" width="7" height="7" fill="var(--gold)"/>
+      <rect x="35" y="21" width="7" height="7" fill="var(--gold)"/>
+      <rect x="28" y="28" width="7" height="7" fill="var(--gold)"/>
+    </svg>
+    <div class="title">Letterbox</div>
+    <div class="tag">Your mail, on every device.</div>
+    <form class="card" id="gate-form" novalidate>
+      <div class="switch" id="gate-switch">
+        <button type="button" data-mode="signin" class="on">Sign in</button>
+        <button type="button" data-mode="create">Create account</button>
+      </div>
+      <div class="lead" id="gate-lead" hidden>Forgot your password? Enter your email and we'll send you a link to choose a new one.</div>
+      <label class="lab" for="em">Email</label>
+      <input id="em" class="m-field" type="email" autocomplete="username" inputmode="email" autocapitalize="off">
+      <label class="lab" id="pw-lab" for="pw">Password</label>
+      <input id="pw" class="m-field" type="password" autocomplete="current-password">
+      <label class="lab" id="pw2-lab" for="pw2" hidden>Confirm password</label>
+      <input id="pw2" class="m-field" type="password" autocomplete="new-password" hidden>
+      <a href="#" class="forgot" id="toForgot">Forgot password?</a>
+      <div class="hint" id="gate-hint">The same account as Hourglass and Jukebox.</div>
+      <div class="notice" id="gate-notice"></div>
+      <div class="err" id="gate-error"></div>
+      <button class="m-btn primary" type="submit" id="signin">Sign in</button>
+    </form>
+    <div class="other"><span id="flip-text">New here? </span><a href="#" id="flip">Create an account</a></div>
+  </div>
 
   <div class="app" id="app" hidden>
     <aside class="m-sidebar side">
@@ -38,10 +64,17 @@
         <header class="top">
           <label class="check" title="Select all"><input type="checkbox" id="all"><span></span></label>
           <h2 class="m-section" id="title">INBOX</h2>
+          <form id="search" class="search" role="search">
+            <span class="ico">&#xf002;</span>
+            <input id="q" class="m-field" type="search" placeholder="Search mail" autocomplete="off" enterkeyhint="search" aria-label="Search mail">
+            <button type="button" class="m-btn subtle compact" id="q-clear" title="Clear search" hidden>&#xf00d;</button>
+          </form>
           <button class="m-btn subtle compact" id="refresh" title="Refresh">&#xf021;<span class="wide"> Refresh</span></button>
         </header>
         <div class="bulk" id="bulk" hidden>
           <span id="count" class="count"></span>
+          <button class="m-btn subtle compact" data-act="important">&#xf005;<span class="wide"> Important</span></button>
+          <button class="m-btn subtle compact" data-act="unimportant" hidden>&#xf006;<span class="wide"> Unstar</span></button>
           <button class="m-btn subtle compact" data-act="read">&#xf2b6;<span class="wide"> Mark read</span></button>
           <button class="m-btn subtle compact" data-act="unread">&#xf0e0;<span class="wide"> Mark unread</span></button>
           <button class="m-btn subtle compact" data-act="spam">&#xf05e;<span class="wide"> Spam</span></button>
@@ -58,19 +91,25 @@
           <button class="m-btn subtle compact" id="back" title="Back (Esc)">&#xf060;<span class="wide"> Back</span></button>
           <span class="grow"></span>
           <button class="m-btn subtle compact" id="r-reply">&#xf112;<span class="wide"> Reply</span></button>
+          <button class="m-btn subtle compact" id="r-forward">&#xf064;<span class="wide"> Forward</span></button>
+          <button class="m-btn subtle compact" id="r-important">&#xf005;<span class="wide" id="r-important-label"> Set as Important</span></button>
           <button class="m-btn subtle compact" id="r-unread">&#xf0e0;<span class="wide"> Mark unread</span></button>
           <button class="m-btn subtle compact" id="r-spam">&#xf05e;<span class="wide"> Spam</span></button>
           <button class="m-btn subtle compact" id="r-notspam">&#xf00c;<span class="wide"> Not spam</span></button>
           <button class="m-btn subtle compact danger" id="r-delete">&#xf1f8;<span class="wide"> Delete</span></button>
         </header>
         <div class="rhead">
-          <h1 id="r-subject" dir="auto"></h1>
+          <div class="rtitle">
+            <button type="button" class="star" id="r-star" title="Set as Important">&#xf006;</button>
+            <h1 id="r-subject" dir="auto"></h1>
+          </div>
           <div class="meta">
             <div><b id="r-from" dir="auto"></b> <span id="r-addr" class="faint"></span></div>
             <div class="faint" id="r-to" dir="auto"></div>
             <div class="faint" id="r-when"></div>
           </div>
           <div id="r-files" class="files"></div>
+          <div id="r-previews" class="previews"></div>
         </div>
         <div class="letter"><iframe id="r-body" title="Message" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe></div>
       </section>
@@ -98,6 +137,7 @@
     </form>
   </div>
 
+  <div id="ctx" class="m-menu" role="menu" hidden></div>
   <div id="toast" class="m-toast" hidden></div>
   <script src="main.js"></script>
 </body>

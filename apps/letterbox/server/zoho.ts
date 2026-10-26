@@ -19,13 +19,14 @@ export type Message = {
 };
 export type Upload = { storeName: string; attachmentPath: string; attachmentName: string };
 export type Outgoing = { to: string; cc?: string; bcc?: string; subject: string; html: string; attachments?: Upload[]; replyTo?: string };
-export type Action = "read" | "unread" | "spam" | "notspam";
+export type Action = "read" | "unread" | "spam" | "notspam" | "important" | "unimportant";
 
 /** What the server needs from a mailbox; the tests stand in a fake one. */
 export interface Mailbox {
   accountInfo(): Promise<{ id: string; email: string; name: string }>;
   folders(): Promise<Folder[]>;
-  messages(q: { folderId?: string; unread?: boolean; start?: number; limit?: number }): Promise<Summary[]>;
+  messages(q: { folderId?: string; unread?: boolean; flagged?: boolean; start?: number; limit?: number }): Promise<Summary[]>;
+  search(q: string, start?: number, limit?: number): Promise<Summary[]>;
   message(folderId: string, id: string): Promise<Message>;
   attachment(folderId: string, id: string, attachmentId: string): Promise<Response>;
   update(action: Action, ids: string[]): Promise<void>;
@@ -38,13 +39,44 @@ const ENTITIES: Record<string, string> = { "&lt;": "<", "&gt;": ">", "&amp;": "&
 // Zoho HTML-escapes some fields (toAddress, summary); clients get plain text.
 export const plain = (s: unknown) => (typeof s === "string" ? s.replace(/&(lt|gt|amp|quot|#39|nbsp);/g, (m) => ENTITIES[m]!).trim() : "");
 // Zoho ids are longer than a double holds; quote any bare long number before JSON.parse rounds it.
-export const parseLong = (text: string) => JSON.parse(text.replace(/([:[,]\s*)(-?\d{16,})(?=\s*[,\]}])/g, '$1"$2"'));
+// Strings are matched first and kept as they are: mail bodies hold links like `gids=[7681837357850529045,…]`.
+export const parseLong = (text: string) =>
+  JSON.parse(text.replace(/"(?:[^"\\]|\\.)*"|([:[,]\s*)(-?\d{16,})(?=\s*[,\]}])/g, (m, pre, n) => (n ? `${pre}"${n}"` : m)));
+// Points every src at an inline part to `url`. Zoho serves the body with `cid:x` already rewritten to its
+// own relative `/mail/ImageDisplay?...&cid=x&`, which the browser can't fetch either.
+export const inlineCid = (html: string, cid: string, url: string) => {
+  const esc = cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const src = new RegExp(`(src\\s*=\\s*)(["'])(?:cid:${esc}|[^"']*[?&](?:amp;)?cid=${esc}(?:&[^"']*)?)\\2`, "gi");
+  return html.replace(src, (_m, attr, q) => `${attr}${q}${url}${q}`).split(`cid:${cid}`).join(url);
+};
+export const imageType = (b: Buffer) =>
+  b[0] === 0xff && b[1] === 0xd8 ? "image/jpeg"
+  : b.subarray(0, 4).toString("latin1") === "\x89PNG" ? "image/png"
+  : b.subarray(0, 3).toString("latin1") === "GIF" ? "image/gif"
+  : b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP" ? "image/webp"
+  : /^\s*<(\?xml|svg)/.test(b.subarray(0, 100).toString("latin1")) ? "image/svg+xml"
+  : "image/png";
 export const ID = /^\d{1,25}$/;
+const summary = (m: any): Summary => ({
+  id: String(m.messageId),
+  threadId: m.threadId ? String(m.threadId) : null,
+  threadCount: Number(m.threadCount) || 0,
+  folderId: String(m.folderId),
+  from: plain(m.sender) || plain(m.fromAddress),
+  fromAddress: plain(m.fromAddress),
+  to: plain(m.toAddress),
+  subject: plain(m.subject),
+  summary: plain(m.summary),
+  time: Number(m.receivedTime),
+  unread: m.status === "0",
+  attachment: m.hasAttachment === "1",
+  flagged: Boolean(m.flagid && m.flagid !== "flag_not_set"),
+});
 const ids = (list: string[]) => {
   if (!list.length || !list.every((i) => ID.test(i))) throw Object.assign(new Error("bad message id"), { status: 400 });
   return `[${list.join(",")}]`; // raw numbers: Zoho wants longs, and a JS number would round them
 };
-const MODES: Record<Action, string> = { read: "markAsRead", unread: "markAsUnread", spam: "moveToSpam", notspam: "markNotSpam" };
+const MODES: Record<"read" | "unread" | "spam" | "notspam", string> = { read: "markAsRead", unread: "markAsUnread", spam: "moveToSpam", notspam: "markNotSpam" };
 
 export class Zoho implements Mailbox {
   private cfg: { client_id: string; client_secret: string; refresh_token: string };
@@ -80,7 +112,9 @@ export class Zoho implements Mailbox {
     const r = await this.raw(method, path, body, timeout);
     const text = await r.text();
     let j: any = {};
-    try { j = parseLong(text); } catch { /* not JSON */ }
+    try { j = parseLong(text); } catch {
+      if (r.ok) throw Object.assign(new Error("Zoho sent a reply Letterbox couldn't read"), { status: 502 });
+    }
     if (!r.ok || (j.status?.code && j.status.code >= 400)) {
       const why = j.data?.errorCode ?? j.data?.moreInfo ?? j.status?.description ?? "request failed";
       throw Object.assign(new Error(`Zoho said ${r.status}: ${why}`), { status: 502 });
@@ -103,25 +137,21 @@ export class Zoho implements Mailbox {
 
   // start is 1-based in Zoho. With no folderId and unread set, Zoho lists unread mail in every folder
   // except Spam and Trash (its own sidebar badges disagree; the API is right).
-  async messages({ folderId, unread = false, start = 1, limit = 50 }: { folderId?: string; unread?: boolean; start?: number; limit?: number }): Promise<Summary[]> {
+  async messages({ folderId, unread = false, flagged = false, start = 1, limit = 50 }: { folderId?: string; unread?: boolean; flagged?: boolean; start?: number; limit?: number }): Promise<Summary[]> {
     const q = new URLSearchParams({ start: String(start), limit: String(limit), sortorder: "false" });
     if (folderId) q.set("folderId", folderId);
     if (unread) q.set("status", "unread");
-    return (await this.api<any[]>("GET", `${await this.base()}/messages/view?${q}`)).map((m) => ({
-      id: String(m.messageId),
-      threadId: m.threadId ? String(m.threadId) : null,
-      threadCount: Number(m.threadCount) || 0,
-      folderId: String(m.folderId),
-      from: plain(m.sender) || plain(m.fromAddress),
-      fromAddress: plain(m.fromAddress),
-      to: plain(m.toAddress),
-      subject: plain(m.subject),
-      summary: plain(m.summary),
-      time: Number(m.receivedTime),
-      unread: m.status === "0",
-      attachment: m.hasAttachment === "1",
-      flagged: Boolean(m.flagid && m.flagid !== "flag_not_set"),
-    }));
+    if (flagged) q.set("flaggedMails", "true");
+    return (await this.api<any[]>("GET", `${await this.base()}/messages/view?${q}`)).map(summary);
+  }
+
+  // Mail from every folder, in the order Zoho returns it. Plain words search everything (Zoho rejects a bare
+  // word); a query that starts with one of Zoho's own keys (from:, subject:, ...) goes through as typed.
+  async search(query: string, start = 1, limit = 50): Promise<Summary[]> {
+    const q = query.trim();
+    const searchKey = /^(entire|from|to|cc|subject|content|has|in|tag|fileName|fileContent|sender):/i.test(q) ? q : `entire:${q}`;
+    const p = new URLSearchParams({ searchKey, start: String(start), limit: String(limit) });
+    return (await this.api<any[]>("GET", `${await this.base()}/messages/search?${p}`)).map(summary);
   }
 
   async message(folderId: string, id: string): Promise<Message> {
@@ -141,9 +171,12 @@ export class Zoho implements Mailbox {
       try {
         const r = await this.raw("GET", `${at}/attachments/${im.attachmentId}`, undefined, 20000, "*/*");
         if (!r.ok) continue;
-        const type = r.headers.get("content-type")?.split(";")[0] || "image/png";
-        const url = `data:${type};base64,${Buffer.from(await r.arrayBuffer()).toString("base64")}`;
-        html = html.split(`cid:${cid}`).join(url);
+        const bytes = Buffer.from(await r.arrayBuffer());
+        const sent = r.headers.get("content-type")?.split(";")[0] ?? "";
+        // Zoho sends inline parts as application/octet-stream, which an <img> may refuse.
+        const type = sent.startsWith("image/") ? sent : imageType(bytes);
+        const url = `data:${type};base64,${bytes.toString("base64")}`;
+        html = inlineCid(html, cid, url);
       } catch { /* the image just stays broken */ }
     }
     return {
@@ -165,6 +198,11 @@ export class Zoho implements Mailbox {
   }
 
   async update(action: Action, list: string[]) {
+    if (action === "important" || action === "unimportant") {
+      const flagid = action === "important" ? "important" : "flag_not_set";
+      await this.api("PUT", `${await this.base()}/updatemessage`, `{"mode":"setFlag","messageId":${ids(list)},"flagid":${JSON.stringify(flagid)}}`);
+      return;
+    }
     await this.api("PUT", `${await this.base()}/updatemessage`, `{"mode":${JSON.stringify(MODES[action])},"messageId":${ids(list)}}`);
   }
 
