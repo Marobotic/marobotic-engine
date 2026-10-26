@@ -49,6 +49,12 @@ class MainActivity : TauriActivity() {
 
   private fun leave() { moveTaskToBack(true) }
 
+  override fun onResume() {
+    super.onResume()
+    // The page may have been alive while Android paused it; the page coalesces this with startup.
+    webView?.evaluateJavascript("dispatchEvent(new Event('vault-resume'))", null)
+  }
+
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     take(intent)

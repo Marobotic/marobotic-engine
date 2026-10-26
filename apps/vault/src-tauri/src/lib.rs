@@ -22,6 +22,11 @@ fn vault_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(vault_file(&app)?.display().to_string())
 }
 
+#[tauri::command]
+fn app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 #[tauri::command(async)]
 fn load_vault(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = vault_file(&app)?;
@@ -551,7 +556,7 @@ pub fn run() {
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state, extension_browsers, open_extensions, open_extension_folder,
+            app_version, vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state, extension_browsers, open_extensions, open_extension_folder,
             unlock_save, unlock_open, unlock_clear
         ])
         .run(tauri::generate_context!())

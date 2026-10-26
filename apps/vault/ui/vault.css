@@ -212,6 +212,7 @@ body:has(.backdrop) { overflow: hidden; }
 .sp-back { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; }
 .sp-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .sp-body > .content { max-width: 760px; margin: 0 auto; padding: 8px 24px 40px; }
+.app-version { max-width: 760px; margin: 0 auto; padding: 0 24px 20px; color: var(--muted); font: 12px var(--sans); }
 .acct { display: flex; align-items: center; gap: 18px; padding: 18px 0 20px; }
 .me.xl { width: 64px; height: 64px; font-size: 26px; cursor: default; }
 .acct-txt { flex: 1; min-width: 0; display: grid; gap: 4px; }

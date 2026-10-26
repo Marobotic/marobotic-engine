@@ -2,7 +2,7 @@
 // browser (for development) it falls back to localStorage, and XIVLauncher can't be reached.
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = (event: string, cb: (e: { payload: unknown }) => void) => Promise<() => void>;
-const T = (globalThis as { __TAURI__?: { core?: { invoke?: Invoke }; event?: { listen?: Listen } } }).__TAURI__;
+const T = (globalThis as { __TAURI__?: { core?: { invoke?: Invoke }; event?: { listen?: Listen }; app?: { getVersion?: () => Promise<string> } } }).__TAURI__;
 const tauri = T?.core?.invoke;
 
 export const inApp = Boolean(tauri);
@@ -11,6 +11,13 @@ export const isIos = /iPhone|iPad/i.test(navigator.userAgent);
 export const isMobile = isAndroid || isIos;
 /** The Windows app: the screen can be scanned, the browser extension can connect. */
 export const isDesktopApp = inApp && !isMobile;
+
+/** The app's packaged version, supplied by Tauri at runtime. */
+export async function appVersion(): Promise<string> {
+  if (T?.app?.getVersion) return T.app.getVersion();
+  if (tauri) return tauri<string>("app_version");
+  return "";
+}
 
 /** The sealed vault file (JSON text), or null before the first setup. */
 export async function loadVault(): Promise<string | null> {

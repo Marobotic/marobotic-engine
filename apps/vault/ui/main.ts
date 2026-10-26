@@ -124,6 +124,9 @@ function pixelLock(cell = 7): string {
 }
 
 let signedInWith: { email: string; password: string } | null = null;   // only to turn on quick unlock this session
+let quickUnlocking = false;
+let autoUnlockAttempted = false;
+let autoUnlock: (() => void) | null = null;
 
 /** Signed out (or locked): sign in, create an account, or get a reset link - the same screen as
  *  Hourglass and Jukebox. On a phone with quick unlock on, offer an explicit biometric login button. */
@@ -164,11 +167,21 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
   $("#flip").onclick = (e) => { e.preventDefault(); signInScreen("", forgot || create ? "signin" : "create"); };
   if (!platform.isMobile) $<HTMLInputElement>(last && !forgot ? "#pw" : "#em").focus();
 
-  const quickUnlock = async () => {
-    const r = await platform.quickUnlock.open();
+  const quickUnlock = async (automatic = false) => {
+    if (quickUnlocking || vault || (automatic && autoUnlockAttempted)) return;
+    if (automatic) autoUnlockAttempted = true;
+    quickUnlocking = true;
+    let r: Awaited<ReturnType<typeof platform.quickUnlock.open>>;
+    try { r = await platform.quickUnlock.open(); }
+    catch (e) {
+      quickUnlocking = false;
+      err((e as Error).message);
+      return;
+    }
     if (!r.email || !r.password) {
       if (r.error === "changed") err("Your phone's fingerprints changed, so quick unlock was turned off. Sign in with your password to turn it on again.");
       else if (r.error && r.error !== "cancelled") err(r.error);
+      quickUnlocking = false;
       return;
     }
     const b = $<HTMLButtonElement>("#quick");
@@ -177,9 +190,13 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
     catch (e) {
       if (e instanceof account.SignInError) { platform.quickUnlock.clear(); signInScreen("Your password changed. Sign in with the new one to turn quick unlock on again."); }
       else { if (b) { b.disabled = false; b.textContent = "Login using biometrics"; } err((e as Error).message); }
+    } finally {
+      quickUnlocking = false;
     }
   };
   $("#quick")?.addEventListener("click", () => void quickUnlock());
+  autoUnlock = platform.isAndroid && quick ? () => void quickUnlock(true) : null;
+  if (autoUnlock) queueMicrotask(() => autoUnlock?.());
 
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -625,9 +642,14 @@ function settingsModal() {
             <span class="m-switch ${platform.quickUnlock.state() === "saved" ? "on" : ""}" id="quickSw" role="switch" tabindex="0"></span>
           </div>` : ""}
         </div>
+        <div class="app-version" id="appVersion" hidden></div>
       </div>
     </div>`).firstElementChild as HTMLElement;
   document.body.append(back);
+  void platform.appVersion().then((version) => {
+    const label = $("#appVersion", back);
+    if (version && label) { label.textContent = `Vault ${version}`; label.hidden = false; }
+  }).catch(() => {});
   const close = () => back.remove();
   back.querySelectorAll<HTMLElement>("[data-close]").forEach((b) => (b.onclick = close));
   const qs = $("#quickSw", back);
@@ -1537,7 +1559,13 @@ addEventListener("keydown", (e) => {
 });
 
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
-// A user explicitly starts biometric sign-in. Do not pop a prompt on each Android foreground event.
+document.addEventListener("visibilitychange", () => {
+  if (!platform.isAndroid) return;
+  if (document.visibilityState === "hidden") autoUnlockAttempted = false;
+  else if (!vault) autoUnlock?.();
+});
+addEventListener("vault-resume", () => { if (platform.isAndroid && !vault) autoUnlock?.(); });
+// Desktop inactivity locks; Android uses the system prompt once per foreground while still locked.
 setInterval(() => {
   if (!platform.isAndroid && vault && lockAfterMin && Date.now() - lastActive > lockAfterMin * 60_000) signInScreen(`Locked after ${lockLabel(lockAfterMin).replace("After ", "")} without use.`, "signin");
   else if (vault) tick();
