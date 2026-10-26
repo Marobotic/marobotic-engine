@@ -72,6 +72,11 @@ export async function browserLockdownState(): Promise<[string, boolean][]> {
   return tauri!<[string, boolean][]>("browser_lockdown_state");
 }
 
+export type ExtensionBrowser = { id: string; name: string; folder: string; installed: boolean };
+export const extensionBrowsers = (): Promise<ExtensionBrowser[]> => isDesktopApp ? tauri!<ExtensionBrowser[]>("extension_browsers") : Promise.resolve([]);
+export const openExtensions = (id: string): Promise<void> => tauri!<void>("open_extensions", { id });
+export const openExtensionFolder = (): Promise<void> => tauri!<void>("open_extension_folder");
+
 /** Bring the window to the front (an otpauth link). */
 export async function showWindow(): Promise<void> {
   if (isDesktopApp) await tauri!<void>("show_window");

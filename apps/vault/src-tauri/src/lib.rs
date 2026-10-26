@@ -298,6 +298,68 @@ fn installed_browsers() -> Vec<(&'static str, &'static str)> {
     BROWSERS.iter().filter(|(_, dir, _)| std::path::Path::new(&local).join(dir).exists()).map(|(n, _, k)| (*n, *k)).collect()
 }
 
+#[cfg(windows)]
+const VAULT_EXTENSION_ID: &str = "dhonkedgjnngkclmpofnejkddphdbnkp";
+
+#[cfg(windows)]
+fn extension_root() -> PathBuf {
+    std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default()
+        .join("Documents/Project Exports/Vault/Extension")
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn extension_browsers() -> Vec<serde_json::Value> {
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    [
+        ("chrome", "Chrome", "Google/Chrome/User Data"),
+        ("brave", "Brave", "BraveSoftware/Brave-Browser/User Data"),
+        ("edge", "Edge", "Microsoft/Edge/User Data"),
+    ].iter().filter_map(|(id, name, profile)| {
+        let root = std::path::Path::new(&local).join(profile);
+        if !root.exists() { return None; }
+        let installed = fs::read_dir(&root).ok()?.filter_map(Result::ok).any(|entry| {
+            let p = entry.path().join("Preferences");
+            fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).and_then(|v| {
+                v.pointer(&format!("/extensions/settings/{VAULT_EXTENSION_ID}/state")).and_then(serde_json::Value::as_i64)
+            }).is_some_and(|state| state == 1)
+        });
+        Some(serde_json::json!({ "id": id, "name": name, "installed": installed, "folder": extension_root().display().to_string() }))
+    }).collect()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn open_extensions(id: String) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let (exe, url): (&str, &str) = match id.as_str() {
+        "chrome" => ("Google/Chrome/Application/chrome.exe", "chrome://extensions"),
+        "brave" => ("BraveSoftware/Brave-Browser/Application/brave.exe", "brave://extensions"),
+        "edge" => ("Microsoft/Edge/Application/msedge.exe", "edge://extensions"),
+        _ => return Err("unknown browser".into()),
+    };
+    let candidates = [std::env::var("PROGRAMFILES").unwrap_or_default(), std::env::var("PROGRAMFILES(X86)").unwrap_or_default(), std::env::var("LOCALAPPDATA").unwrap_or_default()];
+    let path = candidates.iter().map(|p| std::path::Path::new(p).join(exe)).find(|p| p.exists()).ok_or("browser not found")?;
+    std::process::Command::new(path).arg(url).creation_flags(0x0800_0000).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn open_extension_folder() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer").arg(extension_root()).creation_flags(0x0800_0000).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn extension_browsers() -> Vec<serde_json::Value> { Vec::new() }
+#[cfg(not(windows))]
+#[tauri::command]
+fn open_extensions(_id: String) -> Result<(), String> { Err("Windows only".into()) }
+#[cfg(not(windows))]
+#[tauri::command]
+fn open_extension_folder() -> Result<(), String> { Err("Windows only".into()) }
+
 /// Which installed browsers have their own password manager turned off (read from the registry).
 #[cfg(windows)]
 #[tauri::command]
@@ -479,7 +541,7 @@ pub fn run() {
         });
     builder
         .invoke_handler(tauri::generate_handler![
-            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state,
+            vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state, extension_browsers, open_extensions, open_extension_folder,
             unlock_save, unlock_open, unlock_clear
         ])
         .run(tauri::generate_context!())

@@ -472,8 +472,39 @@ function setupSteps(): SetupStep[] {
 
 /** After unlocking on a phone: the setup guide, while something is missing (until "Don't ask again"). */
 function offerSetup() {
+  if (platform.isDesktopApp && localStorage.getItem("vault.extensionDismissed") !== "1" && !document.querySelector(".extensionSetup")) {
+    void platform.extensionBrowsers().then((bs) => { if (bs.length && !bs.some((b) => b.installed) && localStorage.getItem("vault.extensionDone") !== "1" && localStorage.getItem("vault.extensionDismissed") !== "1") extensionSetup(); });
+  }
   if (localStorage.getItem("vault.setupDismissed") === "1" || document.querySelector(".setup")) return;
   if (setupSteps().some((s) => !s.done && !s.id.startsWith("browser:"))) setupModal();
+}
+
+async function extensionSetup() {
+  const browsers = await platform.extensionBrowsers();
+  if (!platform.isDesktopApp || !browsers.length) return;
+  let pick = browsers.find((b) => b.installed)?.id || browsers[0]!.id;
+  const back = h(`<div class="backdrop extensionSetup"><div class="m-modal modal settings setup"><header>Set up the browser extension <button class="m-btn subtle compact" data-close>&#xf00d;</button></header><div class="content"><div class="set"><div><b>Browser</b></div><select class="m-field" id="extBrowser">${browsers.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("")}</select></div><div id="extSteps"></div><div class="set"><div><span>You can come back to this in Settings.</span></div><button class="m-btn subtle compact" id="extNever">Don't ask again</button><button class="m-btn compact" data-close>Done</button></div></div></div></div>`).firstElementChild as HTMLElement;
+  document.body.append(back);
+  const paint = () => {
+    pick = $<HTMLSelectElement>("#extBrowser", back).value || pick;
+    const b = browsers.find((x) => x.id === pick)!;
+    const done = b.installed || localStorage.getItem(`vault.extension.${pick}`) === "done";
+    $("#extSteps", back).innerHTML = done ? `<div class="set"><div><b>&#xf00c; Added to ${esc(b.name)}</b><span>Vault is ready in this browser.</span></div></div>` : `
+      <div class="set"><div><b>1. Open ${esc(b.name)} extensions</b><span>Then turn on Developer mode.</span></div><button class="m-btn compact" id="extOpen">Open</button></div>
+      <div class="set"><div><b>2. Load unpacked</b><span>Choose this folder:</span><span class="selectable" id="extPath">${esc(b.folder)}</span></div><span><button class="m-btn compact" id="extCopy">Copy path</button> <button class="m-btn compact" id="extFolder">Open folder</button></span></div>
+      <div class="set"><div><b>3. Confirm</b><span>Load the folder in the browser.</span></div><button class="m-btn compact" id="extDone">I've added it</button></div>`;
+    $("#extOpen", back)?.addEventListener("click", () => { void platform.openExtensions(pick); });
+    $("#extCopy", back)?.addEventListener("click", () => { void navigator.clipboard.writeText(b.folder).then(() => toast("Folder path copied")); });
+    $("#extFolder", back)?.addEventListener("click", () => { void platform.openExtensionFolder(); });
+    $("#extDone", back)?.addEventListener("click", () => { localStorage.setItem(`vault.extension.${pick}`, "done"); localStorage.setItem("vault.extensionDone", "1"); paint(); });
+  };
+  $<HTMLSelectElement>("#extBrowser", back).value = pick;
+  $("#extBrowser", back).addEventListener("change", paint);
+  paint();
+  const close = () => back.remove();
+  back.querySelectorAll<HTMLElement>("[data-close]").forEach((x) => x.onclick = close);
+  back.onclick = (e) => { if (e.target === back) close(); };
+  $("#extNever", back).onclick = () => { localStorage.setItem("vault.extensionDismissed", "1"); close(); };
 }
 
 function setupModal() {
@@ -529,6 +560,7 @@ function settingsModal() {
           </div>
           <div class="set" ${platform.isMobile ? "hidden" : ""}>
             <div><b>Browser extension</b><span>Vault for Chrome, Brave and Edge signs in with this same account and syncs on its own (this app doesn't need to be open). It fills logins and 2FA codes, saves new logins and passkeys, and signs in with passkeys; they show up here too.</span></div>
+            ${platform.isDesktopApp ? `<button class="m-btn compact" id="extensionSetup">Set up</button>` : ""}
           </div>
           ${platform.isDesktopApp ? `
           <div class="set">
@@ -601,6 +633,7 @@ function settingsModal() {
       await platform.setLinkHandler(linksOn).catch(() => toast("Couldn't change the link setting"));
     };
   }
+  $("#extensionSetup", back)?.addEventListener("click", () => { close(); void extensionSetup(); });
   const af = $("#afState", back);
   if (af) {
     const showAf = () => {
