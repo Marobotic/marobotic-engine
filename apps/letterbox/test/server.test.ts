@@ -14,6 +14,7 @@ const sessions: Record<string, string> = { "s-mi": "mi@marobotic.dev", "s-friend
 const calls: string[] = [];
 const sent: { box: string; m: Outgoing }[] = [];
 const revoked: string[] = [];
+const avatarCalls: string[] = [];
 
 // Two Zoho sign-ins: code-a opens a@zoho.com (Inbox 10, Trash 14), code-b opens b@zoho.eu (Inbox 20).
 // Each inbox holds mail a minute apart, a's on the even minutes and b's on the odd ones.
@@ -68,6 +69,13 @@ before(async () => {
       return;
     }
     if (req.url === "/auth/forgot") return res.writeHead(200).end(JSON.stringify({ ok: true }));
+    if (req.url === "/account/avatar") {
+      let n = 0; req.on("data", (c) => (n += c.length)); req.on("end", () => {
+        avatarCalls.push(`${req.method} ${req.headers.authorization} ${req.headers["content-type"] ?? ""} ${n}`);
+        res.writeHead(200).end("{}");
+      });
+      return;
+    }
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => account.listen(0, "127.0.0.1", ok));
@@ -195,8 +203,24 @@ test("one inbox over every mailbox: newest first, and the cursor carries on in e
   await get(`/api/search?q=%20english%20course&account=all`);
   assert.ok(calls.includes("a search english course 1") && calls.includes("b search english course 1"));
   assert.equal((await fetch(base + "/api/search?q=%20&account=all", { headers: me })).status, 400);
+  // A folder by its path is that folder in every mailbox that has it; a mailbox without it adds nothing.
+  calls.length = 0;
+  const byPath = await get(`/api/messages?account=all&folder=${encodeURIComponent("p:/INBOX")}&limit=2`);
+  assert.deepEqual(byPath.messages.map((m: Summary) => m.subject), ["a0", "b0"]);
+  assert.ok(calls.includes("a list 10 1") && calls.includes("b list 20 1"));
+  calls.length = 0;
+  assert.deepEqual((await get(`/api/messages?account=all&folder=${encodeURIComponent("p:/Trash")}`)).messages.length, 5);
+  assert.deepEqual(calls, ["a list 14 1"], "b has no Trash");
   const folders = await get("/api/folders");
   assert.deepEqual(folders.map((f: any) => [f.account, f.folders.length]), [[A, 2], [B, 1]]);
+});
+
+test("the account picture goes to maro-cache with the session the page doesn't hold", async () => {
+  const up = await fetch(base + "/api/avatar", { method: "POST", headers: { ...me, "x-letterbox": "1", "content-type": "image/png" }, body: Buffer.alloc(10) });
+  assert.equal(up.status, 200);
+  assert.equal((await fetch(base + "/api/avatar", { method: "DELETE", headers: { ...me, "x-letterbox": "1" } })).status, 200);
+  assert.deepEqual(avatarCalls, ["POST Bearer s-mi image/png 10", "DELETE Bearer s-mi  0"]);
+  assert.equal((await fetch(base + "/api/avatar", { method: "POST", headers: { "x-letterbox": "1" }, body: "x" })).status, 401);
 });
 
 test("someone else's mailbox stays theirs", async () => {

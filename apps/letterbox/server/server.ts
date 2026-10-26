@@ -277,7 +277,7 @@ export function createLetterboxServer(opts: {
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const origin = String(req.headers.origin ?? "");
     const cors: Record<string, string> = ORIGINS.has(origin)
-      ? { "access-control-allow-origin": origin, "access-control-allow-headers": "authorization, content-type, x-letterbox", "access-control-allow-methods": "GET, POST, OPTIONS", vary: "origin" }
+      ? { "access-control-allow-origin": origin, "access-control-allow-headers": "authorization, content-type, x-letterbox", "access-control-allow-methods": "GET, POST, DELETE, OPTIONS", vary: "origin" }
       : {};
     const send = (status: number, obj: unknown, headers: Record<string, string> = {}) => {
       res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...cors, ...headers });
@@ -339,6 +339,19 @@ export function createLetterboxServer(opts: {
       });
 
       if (path === "/api/me" && req.method === "GET") return send(200, { email, accounts: mine().map(publicAccount), canAdd: Boolean(zoho) });
+      // The marobotic account's picture (the one Vault, Hourglass and Tasks show): passed on to maro-cache with
+      // the session, which the web page itself never holds (it lives in an HttpOnly cookie).
+      if (path === "/api/avatar" && (req.method === "POST" || req.method === "DELETE")) {
+        const body = req.method === "POST" ? await read(req, 10 * 1024 * 1024) : undefined;
+        const r = await fetch(`${accountUrl}/account/avatar`, {
+          method: req.method,
+          headers: { authorization: `Bearer ${sessionOf(req)}`, ...(body ? { "content-type": String(req.headers["content-type"] || "application/octet-stream") } : {}) },
+          body: body ? new Uint8Array(body) : undefined,
+          signal: AbortSignal.timeout(30000),
+        });
+        const out = (await r.json().catch(() => ({}))) as { error?: string };
+        return send(r.ok ? 200 : r.status >= 500 ? 502 : r.status, r.ok ? { ok: true } : { error: out.error || "That picture couldn't be saved." });
+      }
       if (path === "/api/accounts/connect" && req.method === "POST") {
         if (!zoho) return send(503, { error: "Adding Zoho accounts isn't set up on this server yet" });
         const body = await json<{ app?: boolean }>(req);
@@ -367,12 +380,16 @@ export function createLetterboxServer(opts: {
       if (path === "/api/messages" && req.method === "GET") {
         const folder = q("folder");
         const { cursor, limit, targets } = listArgs();
-        if (!VIEWS.has(folder) && (!ID.test(folder) || targets.length !== 1)) return send(400, { error: "folder is required" });
+        // A folder by its path (p:/Inbox, p:/Inbox/Receipts) is the same folder in every mailbox that has it.
+        const byPath = folder.startsWith("p:") && folder.length <= 302 ? folder.slice(2).toLowerCase() : null;
+        if (!VIEWS.has(folder) && !byPath && (!ID.test(folder) || targets.length !== 1)) return send(400, { error: "folder is required" });
         return send(200, await merged(targets.map((a) => a.id), cursor, limit, async (id, start) => {
           const a = pick(id);
           if (folder === "unread") return box(a).messages({ unread: true, start, limit });
           if (folder === "important") return box(a).messages({ flagged: true, start, limit });
-          const folderId = folder === "inbox" ? (await folders(a)).find((f) => f.type === "Inbox")?.id : folder;
+          const folderId = folder === "inbox" ? (await folders(a)).find((f) => f.type === "Inbox")?.id
+            : byPath !== null ? (await folders(a)).find((f) => (f.path || "").toLowerCase() === byPath)?.id
+            : folder;
           return folderId ? box(a).messages({ folderId, start, limit }) : [];
         }));
       }

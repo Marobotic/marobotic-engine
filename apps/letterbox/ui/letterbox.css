@@ -43,6 +43,16 @@
 .side-foot { margin-top: auto; display: grid; gap: 6px; padding: 12px 14px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .side-foot .foot-btns { display: flex; flex-wrap: wrap; margin-left: -8px; }
 
+/* pictures: the marobotic account's (top right of the sidebar, Settings) and each mailbox's button */
+.brand .me { margin-left: auto; }
+.me { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; background: var(--surface2); border: 1px solid var(--border); color: var(--fg); font: 700 13px var(--mono); cursor: pointer; }
+.me img, .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.me.xl { width: 64px; height: 64px; font-size: 26px; cursor: default; }
+.pic { width: 22px; height: 22px; flex: none; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; color: #fff; font: 700 11px var(--mono); }
+.m-nav.acct { gap: 10px; }
+.m-nav.acct .pic { background: var(--surface2); }
+.settings .set b .pic { display: inline-flex; margin-right: 10px; color: #fff; font: 700 11px var(--mono); }
+
 /* each mailbox: its colour, its name over its folders */
 .dot { display: inline-block; flex: none; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: middle; }
 .acct-head { display: flex; align-items: center; min-width: 0; padding: 6px 14px 4px; color: var(--muted); font: 600 12px var(--mono); }

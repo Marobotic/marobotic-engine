@@ -18,12 +18,12 @@ const ICONS: Record<string, string> = {
 };
 // Each mailbox's colour, by its place in the person's list (the server hands out 0-5).
 const COLORS = ["var(--accent)", "var(--teal)", "var(--gold)", "var(--orange)", "#8E6BBF", "var(--grey)"];
-// Not Zoho folders: these lists come from every mailbox at once.
-const INBOX: Folder = { id: "inbox", name: "All inboxes", type: "Inbox", path: "" };
+// Not Zoho folders: lists drawn from every folder of the mailboxes shown.
+const INBOX: Folder = { id: "p:/Inbox", name: "Inbox", type: "Inbox", path: "/Inbox" };   // until the folders load
 const UNREAD: Folder = { id: "unread", name: "Unread", type: "Unread", path: "" };      // every folder but Spam and Trash
 const IMPORTANT: Folder = { id: "important", name: "Important", type: "Important", path: "" };
 const SEARCH: Folder = { id: "search", name: "Search", type: "Search", path: "" };
-const MIXED = new Set([INBOX, UNREAD, IMPORTANT, SEARCH]);   // lists whose mail comes from many folders
+const MIXED = new Set([UNREAD, IMPORTANT, SEARCH]);   // lists whose mail comes from many folders
 const SENT_LIKE = new Set(["Sent", "Drafts", "Outbox", "Templates"]);
 const ALL = "all";
 
@@ -48,8 +48,6 @@ const state = {
   loading: false,
   done: false,
   seq: 0,
-  unread: null as string | null,
-  important: null as string | null,
   selected: new Set<string>(),                   // keyOf() of each picked row
   anchor: -1,                                    // the last row clicked, for shift-click ranges
   open: null as Mail | null,
@@ -279,7 +277,7 @@ async function removeAccount(a: Account) {
 async function refreshAll() {
   await loadAccounts();
   showMain();
-  openFolder(state.current, state.account);
+  openFolder(state.current);
   countUnread();
   countImportant();
 }
@@ -287,12 +285,15 @@ async function refreshAll() {
 // ---------- settings: a page of its own (back or Esc leave it) ----------
 function renderSettings() {
   $("s-email").textContent = state.me;
+  showMyPicture();
   const list = $("s-accounts");
   list.replaceChildren(...state.accounts.map((a) => {
     const row = el("div", "set");
     const txt = el("div");
     const b = el("b");
-    b.append(dot(a.id), document.createTextNode(a.email));
+    const pic = el("span", "pic");
+    void showPicture(pic, a.email, colorOf(a.id));
+    b.append(pic, document.createTextNode(a.email));
     const err = state.folderErrors.get(a.id);
     txt.append(b, el("span", err ? "bad" : null, err ?? (a.name ? `${a.name} · Zoho Mail` : "Zoho Mail")));
     const rm = el("button", "m-btn subtle compact danger", "Remove");
@@ -318,41 +319,93 @@ $("s-add").onclick = () => void addAccount();
 $("s-signout").onclick = signOut;
 $("welcome-add").onclick = () => void addAccount();
 
-// ---------- folders ----------
-function navRow(f: Folder, account: string, icon: string, sub = false, iconCls = "") {
-  const on = f.id === state.current.id && account === state.account;
-  const row = el("div", "m-nav" + (sub ? " sub" : "") + (on ? " current" : ""));
+// ---------- the sidebar: accounts, then one set of folders ----------
+// One button per mailbox (or all of them); the folders below are the same list for every mailbox, by path,
+// so Inbox is every inbox at once until a mailbox is picked.
+const pathFolder = (f: Folder): Folder => ({ ...f, id: `p:${f.path || `/${f.name}`}` });
+/** The folders to show: the picked mailbox's own, or every mailbox's merged (the first one's order). */
+function visibleFolders(): Folder[] {
+  const from = state.account === ALL ? state.accounts.map((a) => a.id) : [state.account];
+  const seen = new Map<string, Folder>();
+  for (const id of from) {
+    for (const f of state.folders.get(id) ?? []) {
+      const pf = pathFolder(f);
+      if (!seen.has(pf.id.toLowerCase())) seen.set(pf.id.toLowerCase(), pf);
+    }
+  }
+  return [...seen.values()];
+}
+const inboxFolder = () => visibleFolders().find((f) => f.type === "Inbox" && (f.path || "").toLowerCase() === "/inbox") ?? INBOX;
+
+// Unread and important, counted per mailbox from one page of up to 200 over all of them (past that, 200+).
+const counts = {
+  unread: new Map<string, number>(), unreadCapped: false,
+  important: new Map<string, number>(), importantCapped: false,
+};
+function badge(kind: "unread" | "important", account = state.account): string | null {
+  const by = counts[kind];
+  const n = account === ALL ? [...by.values()].reduce((a, b) => a + b, 0) : by.get(account) ?? 0;
+  return n ? `${n}${counts[`${kind}Capped`] ? "+" : ""}` : null;
+}
+function tally(kind: "unread" | "important", page: Mail[]) {
+  const by = new Map<string, number>();
+  for (const m of page) by.set(m.account, (by.get(m.account) ?? 0) + 1);
+  counts[kind] = by;
+  counts[`${kind}Capped`] = page.length === 200;
+}
+function bump(kind: "unread" | "important", list: Mail[], delta: 1 | -1) {
+  for (const m of list) counts[kind].set(m.account, Math.max(0, (counts[kind].get(m.account) ?? 0) + delta));
+  renderFolders();
+}
+
+function navRow(f: Folder, icon: string, sub = false, iconCls = "") {
+  const row = el("div", "m-nav" + (sub ? " sub" : "") + (f.id.toLowerCase() === state.current.id.toLowerCase() ? " current" : ""));
   row.append(el("span", "ico" + (iconCls ? ` ${iconCls}` : ""), icon), el("span", "name", f.name));
-  row.onclick = () => openFolder(f, account);
+  row.onclick = () => openFolder(f);
+  return row;
+}
+function accountRow(id: string, label: string) {
+  const row = el("div", "m-nav acct" + (state.account === id ? " current" : ""));
+  const pic = el("span", "pic");
+  if (id === ALL) pic.textContent = "\uf0c0";
+  else void showPicture(pic, accountOf(id)!.email, colorOf(id));
+  row.append(pic, el("span", "name", label));
+  const n = badge("unread", id);
+  if (n) row.append(el("span", "badge", n));
+  row.title = id === ALL ? "Mail from every account" : label;
+  row.onclick = () => pickAccount(id);
   return row;
 }
 function renderFolders() {
   const nav = $("folders");
   nav.replaceChildren();
   if (!state.accounts.length) return;
-  const inbox = navRow(INBOX, ALL, ICONS.Inbox!);
-  const unread = navRow(UNREAD, ALL, "\uf0e0");
-  if (state.unread) unread.append(el("span", "badge", state.unread));
-  const important = navRow(IMPORTANT, ALL, "\uf005", false, "gold");
-  if (state.important) important.append(el("span", "badge gold", state.important));
-  nav.append(inbox, unread, important);
-  for (const a of state.accounts) {
-    const head = el("div", "acct-head");
-    head.append(dot(a.id), el("span", "name", a.email));
-    head.title = a.email;
-    nav.append(el("div", "nav-sep"), head);
-    const err = state.folderErrors.get(a.id);
-    if (err) {
-      const bad = el("div", "acct-err", err);
-      bad.onclick = openSettings;
-      nav.append(bad);
-      continue;
-    }
-    for (const f of state.folders.get(a.id) ?? []) {
-      const sub = (f.path || "").split("/").filter(Boolean).length > 1;   // /Inbox/Receipts is a sub folder
-      nav.append(navRow(f, a.id, sub ? "\uf07b" : ICONS[f.type] ?? "\uf07b", sub));
-    }
+  if (state.accounts.length > 1) nav.append(accountRow(ALL, "All accounts"));
+  for (const a of state.accounts) nav.append(accountRow(a.id, a.email));
+  nav.append(el("div", "nav-sep"));
+  const unread = navRow(UNREAD, "\uf0e0");
+  const u = badge("unread");
+  if (u) unread.append(el("span", "badge", u));
+  const important = navRow(IMPORTANT, "\uf005", false, "gold");
+  const i = badge("important");
+  if (i) important.append(el("span", "badge gold", i));
+  nav.append(unread, important, el("div", "nav-sep"));
+  const err = state.account !== ALL ? state.folderErrors.get(state.account) : null;
+  if (err) {
+    const bad = el("div", "acct-err", err);
+    bad.onclick = openSettings;
+    nav.append(bad);
   }
+  for (const f of visibleFolders()) {
+    const sub = (f.path || "").split("/").filter(Boolean).length > 1;   // /Inbox/Receipts is a sub folder
+    nav.append(navRow(f, sub ? "\uf07b" : ICONS[f.type] ?? "\uf07b", sub));
+  }
+}
+/** Shows one mailbox (or all): the same folder when it has one, else its Inbox. */
+function pickAccount(id: string) {
+  state.account = id;
+  const keep = MIXED.has(state.current) || visibleFolders().some((f) => f.id.toLowerCase() === state.current.id.toLowerCase());
+  openFolder(keep ? state.current : inboxFolder());
 }
 function notifyNewMail(fresh: Mail[]) {
   if (!fresh.length) return;
@@ -368,12 +421,11 @@ function notifyNewMail(fresh: Mail[]) {
   void platform.notify(`${fresh.length} new messages`, body);
 }
 
-// One page of up to 200 over every mailbox is plenty for a count; past that the badge says 200+.
 async function countUnread() {
   if (!state.accounts.length) return;
   try {
     const page = (await api<Page>(`api/messages?${qs({ account: ALL, folder: "unread", limit: "200" })}`)).messages;
-    state.unread = page.length ? (page.length === 200 ? "200+" : String(page.length)) : null;
+    tally("unread", page);
     renderFolders();
     if (seenUnread === null) {
       seenUnread = new Set(page.map(keyOf));
@@ -387,35 +439,19 @@ async function countUnread() {
         load(true, true);
       }
     }
-  } catch { /* the badge stays as it was */ }
-}
-function bumpUnread(delta: number) {
-  if (state.unread === null && delta < 0) return;
-  if (state.unread?.endsWith("+")) return;
-  const n = Math.max(0, Number(state.unread ?? 0) + delta);
-  state.unread = n ? String(n) : null;
-  renderFolders();
+  } catch { /* the badges stay as they were */ }
 }
 async function countImportant() {
   if (!state.accounts.length) return;
   try {
-    const page = (await api<Page>(`api/messages?${qs({ account: ALL, folder: "important", limit: "200" })}`)).messages;
-    state.important = page.length ? (page.length === 200 ? "200+" : String(page.length)) : null;
+    tally("important", (await api<Page>(`api/messages?${qs({ account: ALL, folder: "important", limit: "200" })}`)).messages);
     renderFolders();
-  } catch { /* the badge stays as it was */ }
-}
-function bumpImportant(delta: number) {
-  if (state.important === null && delta < 0) return;
-  if (state.important?.endsWith("+")) return;
-  const n = Math.max(0, Number(state.important ?? 0) + delta);
-  state.important = n ? String(n) : null;
-  renderFolders();
+  } catch { /* the badges stay as they were */ }
 }
 
-function openFolder(f: Folder, account = ALL) {
+function openFolder(f: Folder) {
   // A mailbox that is gone (removed in Settings) takes its folders with it.
-  if (account !== ALL && !accountOf(account)) { f = INBOX; account = ALL; }
-  state.account = MIXED.has(f) ? ALL : account;
+  if (state.account !== ALL && !accountOf(state.account)) state.account = ALL;
   state.current = f;
   state.selected.clear();
   if (f !== SEARCH) { state.query = ""; $<HTMLInputElement>("q").value = ""; }
@@ -427,6 +463,59 @@ function openFolder(f: Folder, account = ALL) {
   renderFolders();
   load(true);
 }
+
+// ---------- pictures: the marobotic account's own (set here, in Vault or at marobotic.dev/dashboard) ----------
+const CACHE = "https://marobotic.dev/cache";
+const pictures = new Map<string, Promise<string | null>>();
+/** The picture's address for an email (found by its sha256, like Gravatar), or null when there is none. */
+function pictureOf(email: string, fresh = false): Promise<string | null> {
+  const key = email.trim().toLowerCase();
+  if (!fresh && pictures.has(key)) return pictures.get(key)!;
+  const p = (async () => {
+    if (!key || !crypto.subtle) return null;
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+    const url = `${CACHE}/avatar/${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}?t=${fresh ? Date.now() : Date.now() >> 16}`;
+    return new Promise<string | null>((done) => { const i = new Image(); i.onload = () => done(url); i.onerror = () => done(null); i.src = url; });
+  })();
+  pictures.set(key, p);
+  return p;
+}
+/** The picture in `node`, or the email's first letter (on `color`) until, or unless, there is one. */
+async function showPicture(node: HTMLElement, email: string, color = "var(--surface2)"): Promise<boolean> {
+  node.textContent = (email[0] || "?").toUpperCase();
+  node.style.background = color;
+  const url = await pictureOf(email);
+  if (!url) return false;
+  const img = new Image();
+  img.alt = "";
+  img.src = url;
+  node.replaceChildren(img);
+  return true;
+}
+async function setPicture(image: Blob | null) {
+  try {
+    await api("api/avatar", { method: image ? "POST" : "DELETE", ...(image ? { body: image, headers: { "content-type": image.type || "application/octet-stream" } } : {}) });
+    await pictureOf(state.me, true);
+    showMyPicture();
+    renderFolders();
+    toast(image ? "Picture saved; the other apps show it within a few minutes" : "Picture removed");
+  } catch (e) {
+    toast((e as Error).message);
+  }
+}
+function showMyPicture() {
+  void showPicture($("me"), state.me);
+  void showPicture($("s-pic"), state.me).then((has) => { $("s-pic-del").hidden = !has; });
+}
+$("me").onclick = () => openSettings();
+$("s-pic-set").onclick = () => $("s-pic-file").click();
+$<HTMLInputElement>("s-pic-file").onchange = (e) => {
+  const input = e.target as HTMLInputElement;
+  const f = input.files?.[0];
+  input.value = "";
+  if (f) void setPicture(f);
+};
+$("s-pic-del").onclick = () => void setPicture(null);
 
 // ---------- the list ----------
 function renderList() {
@@ -506,7 +595,7 @@ ${new Date(m.time).toLocaleString()}${state.accounts.length > 1 ? `\nTo ${accoun
   const info = el("div", "side-info");
   if (MIXED.has(state.current)) {
     const f = folderOf(m);
-    if (f && !(state.current === INBOX && f.type === "Inbox")) info.append(el("span", "m-chip", f.name));
+    if (f) info.append(el("span", "m-chip", f.name));
   }
   if (m.threadCount > 1) info.append(el("span", "count", `(${m.threadCount})`));
   if (m.attachment) info.append(el("span", null, "\uf0c6"));
@@ -677,7 +766,7 @@ $("search").onsubmit = (e) => {
   openFolder(SEARCH);
 };
 function clearSearch() {
-  if (state.current === SEARCH) openFolder(state.before.folder, state.before.account);
+  if (state.current === SEARCH) { state.account = state.before.account; openFolder(state.before.folder); }
   else $<HTMLInputElement>("q").value = "";
 }
 $("q-clear").onclick = clearSearch;
@@ -719,11 +808,11 @@ async function act(action: Act, list: Mail[], quiet = false) {
     const ok = list.filter((m) => !failed.has(m.id));
     if (action === "read" || action === "unread") {
       const unread = action === "unread";
-      bumpUnread(ok.filter((m) => m.unread !== unread).length * (unread ? 1 : -1));
+      bump("unread", ok.filter((m) => m.unread !== unread), unread ? 1 : -1);
       for (const m of ok) { m.unread = unread; seenUnread?.add(keyOf(m)); }
     } else if (action === "important" || action === "unimportant") {
       const flagged = action === "important";
-      bumpImportant(ok.filter((m) => m.flagged !== flagged).length * (flagged ? 1 : -1));
+      bump("important", ok.filter((m) => m.flagged !== flagged), flagged ? 1 : -1);
       for (const m of ok) m.flagged = flagged;
       if (!flagged && state.current === IMPORTANT) {
         const gone = new Set(ok.map(keyOf));
@@ -735,8 +824,8 @@ async function act(action: Act, list: Mail[], quiet = false) {
       }
     } else {
       // Spam, not spam and delete take the mail out of this folder.
-      bumpUnread(-ok.filter((m) => m.unread).length);
-      bumpImportant(-ok.filter((m) => m.flagged).length);
+      bump("unread", ok.filter((m) => m.unread), -1);
+      bump("important", ok.filter((m) => m.flagged), -1);
       const gone = new Set(ok.map(keyOf));
       state.messages = state.messages.filter((m) => !gone.has(keyOf(m)));
     }
@@ -900,7 +989,7 @@ async function openMessage(m: Mail) {
     if (m.unread) {
       m.unread = false;
       post("api/actions", { action: "read", items: [{ account: m.account, id: m.id, folder: m.folderId }] })
-        .then(() => bumpUnread(-1), () => { m.unread = true; toast("Couldn't mark it read"); });
+        .then(() => bump("unread", [m], -1), () => { m.unread = true; toast("Couldn't mark it read"); });
     }
   } catch (e) {
     if (state.open === m) showLetter(`<p style="color:#b14242">Couldn't open this message: ${String((e as Error).message).replace(/[<&]/g, "")}</p>`);
@@ -1142,7 +1231,7 @@ async function start() {
       history.replaceState(null, "", location.pathname);
     }
     if (!state.accounts.length) return;
-    openFolder(INBOX);
+    openFolder(inboxFolder());
     countUnread();
     countImportant();
   } catch (e) {

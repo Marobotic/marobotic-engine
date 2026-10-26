@@ -50,7 +50,7 @@
 
   <div class="app" id="app" hidden>
     <aside class="m-sidebar side">
-      <div class="brand"><span class="logo">&#xf0e0;</span> Letterbox</div>
+      <div class="brand"><span class="logo">&#xf0e0;</span> Letterbox<button type="button" class="me" id="me" title="Settings" aria-label="Settings"></button></div>
       <button class="m-btn primary compose-btn" id="compose">&#xf040; Compose</button>
       <nav id="folders"></nav>
       <footer class="side-foot">
@@ -136,10 +136,16 @@
     <div class="sp-body">
       <div class="content">
         <div class="acct">
+          <span class="me xl" id="s-pic"></span>
           <div class="acct-txt">
             <b id="s-email"></b>
-            <span>Your marobotic account, the same as Hourglass, Jukebox and Vault. The mail accounts below belong to it, on every device you sign in on.</span>
-            <div class="acct-btns"><button class="m-btn subtle compact" id="s-signout">&#xf08b; Sign out</button></div>
+            <span>Your marobotic account, the same as Hourglass, Jukebox and Vault. Its picture shows in every app; the mail accounts below belong to it, on every device you sign in on.</span>
+            <div class="acct-btns">
+              <button class="m-btn compact" id="s-pic-set">Change picture</button>
+              <button class="m-btn subtle compact" id="s-pic-del" hidden>Remove</button>
+              <button class="m-btn subtle compact" id="s-signout">&#xf08b; Sign out</button>
+            </div>
+            <input type="file" id="s-pic-file" accept="image/*" hidden>
           </div>
         </div>
         <h2 class="m-section">Mail accounts</h2>
