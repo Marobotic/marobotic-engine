@@ -290,6 +290,7 @@ test("helpers", async () => {
   assert.deepEqual(parseLong(`{"data":{"messageId":1791831933908153400,"content":"${body}"}}`), { data: { messageId: "1791831933908153400", content: JSON.parse(`"${body}"`) } });
   assert.equal(accountsServer("https://accounts.zoho.eu"), "https://accounts.zoho.eu");
   assert.equal(accountsServer("https://accounts.zohocloud.ca"), "https://accounts.zohocloud.ca");
+  assert.equal(accountsServer("https://accounts.zoho.ae"), "https://accounts.zoho.ae");
   assert.equal(accountsServer("https://accounts.zoho.eu.evil.com"), null);
   assert.equal(accountsServer("https://accounts.zohoXeu"), null);
   assert.equal(mailServer("https://accounts.zoho.com.au"), "https://mail.zoho.com.au");
