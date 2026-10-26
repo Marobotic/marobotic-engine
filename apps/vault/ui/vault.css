@@ -177,3 +177,10 @@ body:has(.backdrop) { overflow: hidden; }
 
 /* Rows off screen are skipped until scrolled to (hundreds of logins and codes stay quick). */
 .code-row, .item.login { content-visibility: auto; contain-intrinsic-size: auto 72px; }
+
+/* Phones: an app, not a web page - no pinch or double-tap zoom, no grey flash on taps, no rubber band
+   or pull-to-refresh, and long-pressing a button doesn't select its text. */
+@media (pointer: coarse) {
+  html, body { touch-action: pan-x pan-y; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+  button, .m-seg, .top, .m-menu { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}

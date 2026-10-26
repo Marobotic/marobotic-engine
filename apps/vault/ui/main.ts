@@ -1458,6 +1458,31 @@ addEventListener("vault-link", async () => { const l = await platform.takeLaunch
 if (platform.hasAutofill) { setInterval(() => void takeAndroidSaves(), 2000); addEventListener("focus", () => void takeAndroidSaves()); }
 if (platform.isDesktopApp) void platform.setLinkHandler(linksOn).catch(() => {});
 
+// Android's back button and back gesture (MainActivity asks this first), and Esc on Windows: back
+// closes what's on top (the camera, a menu, a window, the question it asked), then steps back (a
+// search, the Passwords tab, the other sign-in pages). False when there's nothing left, and Android
+// then leaves Vault as it does any app.
+function goBack(): boolean {
+  const cam = document.querySelector<HTMLElement>(".camera button");
+  if (cam) { cam.click(); return true; }
+  if (document.querySelector(".menu-backdrop")) { closeMenu(); return true; }
+  const tops = document.querySelectorAll<HTMLElement>(".backdrop");
+  const top = tops[tops.length - 1];
+  if (top) { top.click(); return true; }   // every window closes on a tap outside it, the same as Cancel
+  if (!vault) {
+    if (document.querySelector(".signin #flip") && !document.querySelector(".switch [data-mode=signin].on")) { signInScreen(); return true; }
+    return false;
+  }
+  if (query) { query = ""; const q = document.querySelector<HTMLInputElement>("#q"); if (q) { q.value = ""; q.blur(); } renderList(); return true; }
+  if (filter !== "totp") { filter = "totp"; homeScreen(); return true; }
+  return false;
+}
+(globalThis as { vaultBack?: () => boolean }).vaultBack = goBack;
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (document.querySelector(".camera, .menu-backdrop, .backdrop") && goBack()) e.preventDefault();
+});
+
 for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => (lastActive = Date.now()));
 // A user explicitly starts biometric sign-in. Do not pop a prompt on each Android foreground event.
 setInterval(() => {

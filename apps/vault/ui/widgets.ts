@@ -95,4 +95,4 @@ export function openMenu(x: number, y: number, sections: MenuSection[]) {
   back.oncontextmenu = (e) => { e.preventDefault(); closeMenu(); };
 }
 
-if (typeof addEventListener !== "undefined") addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+if (typeof addEventListener !== "undefined") addEventListener("keydown", (e) => { if (e.key === "Escape" && openMenuEl) { closeMenu(); e.preventDefault(); } });

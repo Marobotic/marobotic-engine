@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.autofill.AutofillManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -23,6 +24,10 @@ class MainActivity : TauriActivity() {
   /** Opened to unlock for autofill: once the vault is open, go back to the app that asked. */
   @Volatile private var forAutofill = false
 
+  // Back is the page's: it closes the window or menu on top, then steps back (window.vaultBack in
+  // main.ts). Only when there's nothing left does Vault go to the background, back to the app before it.
+  override val handleBackNavigation: Boolean = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -34,7 +39,15 @@ class MainActivity : TauriActivity() {
       WindowInsetsCompat.CONSUMED
     }
     take(intent)
+    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+      override fun handleOnBackPressed() {
+        val wv = webView ?: return leave()
+        wv.evaluateJavascript("!!(window.vaultBack && window.vaultBack())") { handled -> if (handled != "true") leave() }
+      }
+    })
   }
+
+  private fun leave() { moveTaskToBack(true) }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
@@ -53,6 +66,8 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
+    webView.settings.setSupportZoom(false)   // an app, not a web page: no pinch zoom
+    webView.settings.builtInZoomControls = false
     webView.addJavascriptInterface(Bridge(), "VaultAndroid")
   }
 
