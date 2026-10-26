@@ -373,16 +373,44 @@ function accountRow(id: string, label: string) {
   const n = badge("unread", id);
   if (n) row.append(el("span", "badge", n));
   row.title = id === ALL ? "Mail from every account" : label;
-  row.onclick = () => pickAccount(id);
+  row.onclick = () => { closeAccountMenu(); pickAccount(id); };
   return row;
 }
+// The accounts sit behind one button: it shows the one picked (or All accounts) and opens the list.
+function accountPicker() {
+  const id = state.accounts.length > 1 ? state.account : state.accounts[0]!.id;
+  const btn = accountRow(id, id === ALL ? "All accounts" : accountOf(id)!.email);
+  btn.classList.remove("current");
+  btn.classList.add("picker");
+  btn.querySelector(".badge")?.remove();   // Unread right below says it; the name gets the room
+  btn.title = "Switch account";
+  btn.append(el("span", "caret", "\uf107"));
+  btn.onclick = (e) => { e.stopPropagation(); $("acct-menu").hidden ? openAccountMenu(btn) : closeAccountMenu(); };
+  return btn;
+}
+function openAccountMenu(anchor: HTMLElement) {
+  const menu = $("acct-menu");
+  menu.replaceChildren(el("div", "t", "Accounts"));
+  if (state.accounts.length > 1) menu.append(accountRow(ALL, "All accounts"));
+  for (const a of state.accounts) menu.append(accountRow(a.id, a.email));
+  const add = el("div", "m-nav acct add");
+  add.append(el("span", "pic", "\uf067"), el("span", "name", "Add Zoho account"));
+  add.onclick = () => { closeAccountMenu(); void addAccount(); };
+  menu.append(el("div", "nav-sep"), add);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${r.left}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.width = `${Math.max(r.width, 260)}px`;
+  menu.hidden = false;
+}
+const closeAccountMenu = () => { $("acct-menu").hidden = true; };
+document.addEventListener("click", (e) => { if (!$("acct-menu").contains(e.target as Node)) closeAccountMenu(); });
+window.addEventListener("resize", closeAccountMenu);
 function renderFolders() {
   const nav = $("folders");
   nav.replaceChildren();
   if (!state.accounts.length) return;
-  if (state.accounts.length > 1) nav.append(accountRow(ALL, "All accounts"));
-  for (const a of state.accounts) nav.append(accountRow(a.id, a.email));
-  nav.append(el("div", "nav-sep"));
+  nav.append(accountPicker(), el("div", "nav-sep"));
   const unread = navRow(UNREAD, "\uf0e0");
   const u = badge("unread");
   if (u) unread.append(el("span", "badge", u));
@@ -1197,7 +1225,8 @@ form.onsubmit = async (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!$("ctx").hidden) closeContextMenu();
+  if (!$("acct-menu").hidden) closeAccountMenu();
+  else if (!$("ctx").hidden) closeContextMenu();
   else if (!$("composer").hidden) closeCompose();
   else if (!$("settings").hidden) closeSettings();
   else if (!$("reader").hidden) closeReader();

@@ -50,6 +50,14 @@
 .me.xl { width: 64px; height: 64px; font-size: 26px; cursor: default; }
 .pic { width: 22px; height: 22px; flex: none; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; color: #fff; font: 700 11px var(--mono); }
 .m-nav.acct { gap: 10px; }
+.m-nav.acct.picker { border: 1px solid var(--border); }
+.m-nav.acct.picker .caret { margin-left: 6px; color: var(--muted); }
+.m-nav.acct.picker .badge + .caret { margin-left: 6px; }
+.m-nav.acct.picker .name { flex: 1; min-width: 0; }
+#acct-menu { position: fixed; z-index: 30; max-width: calc(100vw - 16px); background: var(--surface2); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); user-select: none; }
+#acct-menu .m-nav.acct { height: 36px; }
+#acct-menu .m-nav.acct .name { flex: 1; min-width: 0; }
+#acct-menu .add { color: var(--muted); }
 .m-nav.acct .pic { background: var(--surface2); }
 .settings .set b .pic { display: inline-flex; margin-right: 10px; color: #fff; font: 700 11px var(--mono); }
 
