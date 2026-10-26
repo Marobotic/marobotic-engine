@@ -1122,7 +1122,7 @@ function showMain() {
   const none = !state.accounts.length;
   $("welcome").hidden = !none;
   $("listview").hidden = none;
-  if (none) { $("reader").hidden = true; renderFolders(); }
+  if (none) { $("reader").hidden = true; renderFolders(); sync("No mailboxes yet", "var(--faint)"); }
 }
 async function start() {
   if (platform.inApp && !platform.getSession()) {
