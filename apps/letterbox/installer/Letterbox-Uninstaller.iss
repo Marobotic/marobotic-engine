@@ -1,7 +1,7 @@
 ; Letterbox Uninstaller (Inno Setup 6): a standalone program that removes Letterbox from this PC and
 ; everything it added, even when the app is missing or broken.
 ;
-;   ISCC /DAppVersion=0.1.0 apps\letterbox\installer\Letterbox-Uninstaller.iss
+;   ISCC /DAppVersion=0.1.2 apps\letterbox\installer\Letterbox-Uninstaller.iss
 ;
 ;   1. closes Letterbox (it keeps running in the tray),
 ;   2. runs the installed app's own uninstaller when there is one,

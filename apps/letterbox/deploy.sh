@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys Letterbox to the droplet: /opt/marobotic-letterbox, pm2 "letterbox" on 127.0.0.1:8970, served by
 # nginx at marobotic.dev/letterbox/. Backs the old copy up to /opt/marobotic-letterbox.bak-<epoch> first.
-# The Zoho config lives in /etc/marobotic/letterbox-zoho.json on the droplet (never in this repo).
+# Zoho client config: /etc/marobotic/letterbox-zoho-app.json; account store/key: /var/lib/marobotic-letterbox and /etc/marobotic/letterbox.key. The carry-over Self Client config is /etc/marobotic/letterbox-zoho.json (never in this repo).
 set -euo pipefail
 cd "$(dirname "$0")"
 KEY="${DROPLET_KEY:-$HOME/Documents/Droplets/id_ed25519_claude}"
@@ -15,7 +15,8 @@ tar -czf - server dist package.json | ssh_ 'set -e
   rm -rf $D && mv $D.new $D
   if pm2 describe letterbox >/dev/null 2>&1; then pm2 restart letterbox --update-env >/dev/null
   else
-    LETTERBOX_ZOHO=/etc/marobotic/letterbox-zoho.json LETTERBOX_USERS=mi@marobotic.dev LETTERBOX_PORT=8970 \
+    LETTERBOX_ZOHO_APP=/etc/marobotic/letterbox-zoho-app.json LETTERBOX_DATA=/var/lib/marobotic-letterbox LETTERBOX_KEY=/etc/marobotic/letterbox.key \
+    LETTERBOX_ZOHO=/etc/marobotic/letterbox-zoho.json LETTERBOX_CARRY_OVER=mi@marobotic.dev LETTERBOX_PORT=8970 \
     LETTERBOX_COOKIE_PATH=/letterbox/ MARO_ACCOUNT_URL=http://127.0.0.1:8900 \
     pm2 start /opt/node22/bin/node --name letterbox --cwd $D -- --experimental-strip-types --no-warnings $D/server/server.ts >/dev/null
     pm2 save >/dev/null
