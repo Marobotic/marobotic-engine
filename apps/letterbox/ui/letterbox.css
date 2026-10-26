@@ -50,8 +50,9 @@
 .me.xl { width: 64px; height: 64px; font-size: 26px; cursor: default; }
 .pic { width: 22px; height: 22px; flex: none; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; color: #fff; font: 700 11px var(--mono); }
 .m-nav.acct { gap: 10px; }
-.m-nav.acct.picker { border: 1px solid var(--border); }
-.m-nav.acct.picker .caret { margin-left: 6px; color: var(--muted); }
+/* the picker is a box of its own: room inside its border, lined up under Compose */
+.m-nav.acct.picker { height: 44px; margin: 0 2px 6px; padding: 0 12px 0 10px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; }
+.m-nav.acct.picker .caret { flex: none; margin-left: 4px; color: var(--muted); }
 .m-nav.acct.picker .badge + .caret { margin-left: 6px; }
 .m-nav.acct.picker .name { flex: 1; min-width: 0; }
 #acct-menu { position: fixed; z-index: 30; max-width: calc(100vw - 16px); background: var(--surface2); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); user-select: none; }
@@ -218,6 +219,7 @@ a.file:hover { border-color: var(--fg); }
   .app:has(#reader:not([hidden])) .compose-btn { display: none; } /* reading has Reply; the button would sit on the mail */
   #folders { flex-direction: row; overflow-x: auto; padding-bottom: 8px; }
   .m-nav, .m-nav.sub { flex: none; padding: 0 12px; font-size: 13px; }
+  .m-nav.acct.picker { height: 38px; margin: 0; font-size: 13px; }
   /* phones keep only the buttons: Settings and Sign out */
   .side-foot { display: flex; padding: 0 0 8px; border-top: 0; }
   .side-foot #email, .side-foot #sync { display: none; }

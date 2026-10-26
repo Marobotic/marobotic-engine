@@ -20,7 +20,7 @@ installer/         standalone Windows uninstaller (Inno Setup 6)
 deploy.sh          build, back up /opt/marobotic-letterbox, upload, pm2 restart
 ```
 
-Build the Windows app (`Letterbox_0.1.2_x64-setup.exe`):
+Build the Windows app (`Letterbox_0.1.3_x64-setup.exe`):
 
 ```powershell
 npx tauri build
