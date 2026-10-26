@@ -1,6 +1,6 @@
 [package]
 name = "vault"
-version = "0.3.14"
+version = "0.3.15"
 description = "Vault: encrypted 2FA, passwords and passkeys"
 authors = ["Marobotic"]
 edition = "2021"
