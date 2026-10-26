@@ -220,6 +220,7 @@ async function offerQuickUnlock() {
 /** Sign in, then: the server's vault (with this PC's offline changes merged in), this PC's vault
  *  uploaded, or a brand-new vault for an account that has none yet. */
 async function openAccount(email: string, pw: string, create = false) {
+  picShown = null;
   localStorage.setItem("vault.email", email);
   const localFile = file && file.email === email ? file : null;
   signedInWith = { email, password: pw };
@@ -387,11 +388,28 @@ async function copy(text: string, said: string, clearAfter = 0): Promise<boolean
   return true;
 }
 
+const myEmail = () => file?.email || localStorage.getItem("vault.email") || "";
+let picShown: Promise<string | null> | null = null;   // the account picture, looked up once per change
+/** The account's picture in `node`, or its initial until (or unless) there is one. */
+function showMe(node: HTMLElement) {
+  const email = myEmail();
+  node.textContent = (email[0] || "?").toUpperCase();
+  picShown ??= account.pictureOf(email);
+  void picShown.then((url) => {
+    if (!url) return;
+    const img = new Image();
+    img.alt = "";
+    img.src = url;
+    node.replaceChildren(img);
+  });
+}
+
 function homeScreen() {
   app.replaceChildren(h(`
     <div class="top">
       <div class="brand"><span class="logo"></span> Vault</div>
       <div class="m-sync sync-line grow" id="sync" style="--state: var(--faint)">${session ? "Syncing…" : `Offline - saved on ${here}`}</div>
+      <button class="me" id="me" type="button" title="Account" aria-label="Account"></button>
       <button class="m-btn subtle compact" id="settings" title="Settings" aria-label="Settings"><svg class="ecosystem-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.43 12.98 c0.04 -0.32 0.07 -0.64 0.07 -0.98 c0 -0.34 -0.03 -0.66 -0.07 -0.98 l2.11 -1.65 c0.19 -0.15 0.24 -0.42 0.12 -0.64 l-2.0 -3.46 c-0.09 -0.16 -0.26 -0.25 -0.44 -0.25 c-0.06 0 -0.12 0.01 -0.17 0.03 l-2.49 1 c-0.52 -0.4 -1.08 -0.73 -1.69 -0.98 l-0.38 -2.65 C14.46 2.18 14.25 2 14.0 2 h-4.0 c-0.25 0 -0.46 0.18 -0.49 0.42 l-0.38 2.65 c-0.61 0.25 -1.17 0.59 -1.69 0.98 l-2.49 -1.0 c-0.06 -0.02 -0.12 -0.03 -0.18 -0.03 c-0.17 0 -0.34 0.09 -0.43 0.25 l-2.0 3.46 c-0.13 0.22 -0.07 0.49 0.12 0.64 l2.11 1.65 c-0.04 0.32 -0.07 0.65 -0.07 0.98 c0 0.33 0.03 0.66 0.07 0.98 l-2.11 1.65 c-0.19 0.15 -0.24 0.42 -0.12 0.64 l2 3.46 c0.09 0.16 0.26 0.25 0.44 0.25 c0.06 0 0.12 -0.01 0.17 -0.03 l2.49 -1.0 c0.52 0.4 1.08 0.73 1.69 0.98 l0.38 2.65 c0.03 0.24 0.24 0.42 0.49 0.42 h4.0 c0.25 0 0.46 -0.18 0.49 -0.42 l0.38 -2.65 c0.61 -0.25 1.17 -0.59 1.69 -0.98 l2.49 1 c0.06 0.02 0.12 0.03 0.18 0.03 c0.17 0 0.34 -0.09 0.43 -0.25 l2 -3.46 c0.12 -0.22 0.07 -0.49 -0.12 -0.64 l-2.11 -1.65 z M17.45 11.27 c0.04 0.31 0.05 0.52 0.05 0.73 c0 0.21 -0.02 0.43 -0.05 0.73 l-0.14 1.13 l0.89 0.7 l1.08 0.84 l-0.7 1.21 l-1.27 -0.51 l-1.04 -0.42 l-0.9 0.68 c-0.43 0.32 -0.84 0.56 -1.25 0.73 l-1.06 0.43 l-0.16 1.13 l-0.2 1.35 h-1.4 l-0.19 -1.35 l-0.16 -1.13 l-1.06 -0.43 c-0.43 -0.18 -0.83 -0.41 -1.23 -0.71 l-0.91 -0.7 l-1.06 0.43 l-1.27 0.51 l-0.7 -1.21 l1.08 -0.84 l0.89 -0.7 l-0.14 -1.13 c-0.03 -0.31 -0.05 -0.54 -0.05 -0.74 s0.02 -0.43 0.05 -0.73 l0.14 -1.13 l-0.89 -0.7 l-1.08 -0.84 l0.7 -1.21 l1.27 0.51 l1.04 0.42 l0.9 -0.68 c0.43 -0.32 0.84 -0.56 1.25 -0.73 l1.06 -0.43 l0.16 -1.13 l0.2 -1.35 h1.39 l0.19 1.35 l0.16 1.13 l1.06 0.43 c0.43 0.18 0.83 0.41 1.23 0.71 l0.91 0.7 l1.06 -0.43 l1.27 -0.51 l0.7 1.21 l-1.07 0.85 l-0.89 0.7 l0.14 1.13 z M12.0 8.0 c-2.21 0 -4.0 1.79 -4.0 4.0 s1.79 4.0 4.0 4.0 s4.0 -1.79 4.0 -4.0 s-1.79 -4.0 -4.0 -4.0 z M12.0 14.0 c-1.1 0 -2.0 -0.9 -2.0 -2.0 s0.9 -2.0 2 -2.0 s2 0.9 2 2 s-0.9 2 -2.0 2 z"/></svg><span class="lbl"> Settings</span></button>
     </div>
     <div class="bar">
@@ -401,6 +419,8 @@ function homeScreen() {
     <input class="m-field search" id="q" placeholder="Search" value="${esc(query)}">
     <div id="list"></div>`));
   $("#settings").onclick = () => settingsModal();
+  $("#me").onclick = () => settingsModal();
+  showMe($("#me"));
   $("#import").onclick = () => (filter === "totp" ? addCodeModal() : importModal());
   const seg = $("#filter");
   for (const [v, label] of [["totp", "2FA codes"], ["login", "Passwords"]] as const) {
@@ -547,8 +567,15 @@ function settingsModal() {
         <header>Settings <button class="m-btn subtle compact" type="button" data-close title="Close">&#xf00d;</button></header>
         <div class="content">
           <div class="set">
-            <div><b>Account</b><span>${esc([file?.email || localStorage.getItem("vault.email") || "", session ? "" : "offline"].filter(Boolean).join(" · "))}</span></div>
+            <div><b>Account</b><span>${esc([myEmail(), session ? "" : "offline"].filter(Boolean).join(" · "))}</span></div>
             <button class="m-btn compact" id="lockNow">Lock now</button>
+          </div>
+          <div class="set">
+            <span class="me lg" id="mePic"></span>
+            <div><b>Picture</b><span>Shown in every marobotic app: Vault, Tasks, Dock and the rest.</span></div>
+            <button class="m-btn compact" id="picSet"${session ? "" : " disabled"}>Change</button>
+            <button class="m-btn subtle compact" id="picDel"${session ? "" : " disabled"}>Remove</button>
+            <input type="file" id="picFile" accept="image/*" hidden>
           </div>
           <div class="set">
             <div><b>Lock automatically</b><span>${platform.isAndroid ? "On Android, Vault stays unlocked until the app process ends or you lock it manually." : `Sign out of Vault after this long without use.${platform.isMobile ? "" : " Closing the window keeps Vault open in the tray; Quit from the tray icon locks it."}`}</span></div>
@@ -656,6 +683,21 @@ function settingsModal() {
     toast(lockAfterMin ? `Vault locks after ${lockLabel(lockAfterMin).replace("After ", "")} without use` : "Vault stays open until you quit or lock it");
   };
   $("#lockNow", back).onclick = () => { close(); signInScreen("", "signin"); };
+  showMe($("#mePic", back));
+  const picFile = $<HTMLInputElement>("#picFile", back);
+  const putPic = async (image: Blob | null) => {
+    if (!session) return toast("Connect to marobotic.dev to change your picture");
+    try {
+      await account.setPicture(session, image);
+      picShown = account.pictureOf(myEmail(), true);
+      showMe($("#mePic", back));
+      if ($("#me")) showMe($("#me"));
+      toast(image ? "Picture saved; other apps show it within a few minutes" : "Picture removed");
+    } catch (e) { toast((e as Error).message); }
+  };
+  $("#picSet", back).onclick = () => picFile.click();
+  picFile.onchange = () => { const f = picFile.files?.[0]; picFile.value = ""; if (f) void putPic(f); };
+  $("#picDel", back).onclick = () => void putPic(null);
   $("#kit", back).onclick = async () => {
     if (!(await ask("Make a new recovery kit? Your current one stops working, so write the new one down right away."))) return;
     const code = vault!.newRecoveryKit();

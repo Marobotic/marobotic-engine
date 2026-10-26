@@ -62,3 +62,32 @@ export async function pushVault(session: string, base: number, file: VaultFile):
   if (!r.ok) throw new Offline("marobotic.dev is not answering");
   return (await r.json()) as { rev: number };
 }
+
+// The account's picture: set here or at marobotic.dev/dashboard, shown in every marobotic app.
+const CACHE = "https://marobotic.dev/cache";
+
+/** The picture's address for an email (found by its sha256, like Gravatar), or null when there is none;
+ *  `fresh` skips the copy the window may have kept from the last minute. */
+export async function pictureOf(email: string, fresh = false): Promise<string | null> {
+  if (!email || !crypto.subtle) return null;
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email.trim().toLowerCase()));
+  const url = `${CACHE}/avatar/${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}?t=${fresh ? Date.now() : Date.now() >> 16}`;
+  return new Promise((done) => { const i = new Image(); i.onload = () => done(url); i.onerror = () => done(null); i.src = url; });
+}
+
+/** A new picture (any image; the server crops it to its middle square), or null to remove it. */
+export async function setPicture(session: string, image: Blob | null): Promise<void> {
+  let r: Response;
+  try {
+    r = await fetch(`${CACHE}/account/avatar`, {
+      method: image ? "POST" : "DELETE",
+      headers: { authorization: `Bearer ${session}`, ...(image ? { "content-type": image.type || "application/octet-stream" } : {}) },
+      body: image ?? undefined,
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch {
+    throw new Offline("Can't reach marobotic.dev");
+  }
+  if (r.status === 401) throw new SignInError("Sign in again.");
+  if (!r.ok) { const j = (await r.json().catch(() => ({}))) as { error?: string }; throw new Error(j.error || "That picture couldn't be saved."); }
+}

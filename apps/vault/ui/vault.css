@@ -142,6 +142,22 @@ details.more summary:hover { color: var(--fg); }
   .modal .content { padding: 10px 14px 16px; }
 }
 
+/* Phones: text read without zooming and buttons big enough for a thumb. */
+@media (max-width: 560px) and (pointer: coarse) {
+  body { font-size: 15px; }
+  .top .sync-line, .sync-line, .txt span, .code-row .auto, .settings .set span, details.more summary, .keystate,
+  .signin .forgot, .signin .hint, fa .hint { font-size: 13px; }
+  label.lab, .pin, fa .m-section { font-size: 12px; }
+  .kindtag { font-size: 11px; }
+  .txt b { font-size: 15px; }
+  .m-btn.compact { height: 40px; min-width: 40px; padding: 0 12px; font-size: 14px; }
+  .bar .m-btn { height: 40px; }
+  .m-field, .search { min-height: 42px; font-size: 15px; }
+  .tile { width: 36px; height: 36px; font-size: 13px; }
+  .tile.icon img { width: 26px; height: 26px; }
+  .me { width: 40px; height: 40px; font-size: 15px; }
+}
+
 /* a login's one-time code in its editor */
 .otpnow { font: 700 18px var(--mono); letter-spacing: 2px; }
 .otpbox .otpadd { display: grid; gap: 6px; }
@@ -184,3 +200,8 @@ body:has(.backdrop) { overflow: hidden; }
   html, body { touch-action: pan-x pan-y; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
   button, .m-seg, .top, .m-menu { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }
+
+/* the account's picture, or its initial */
+.me { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; background: var(--surface2, #252525); border: 1px solid var(--border); color: var(--muted, #969696); font: 700 13px var(--mono); cursor: pointer; }
+.me img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.me.lg { width: 44px; height: 44px; font-size: 18px; cursor: default; }
