@@ -4655,7 +4655,7 @@ dependencies = [
 
 [[package]]
 name = "vault"
-version = "0.3.16"
+version = "0.3.17"
 dependencies = [
  "core-foundation",
  "core-foundation-sys",
