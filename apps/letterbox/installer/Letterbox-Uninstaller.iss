@@ -53,6 +53,7 @@ FinishedLabelNoIcons=Everything Letterbox added to this computer is gone.
 ClickFinish=Click Finish to close.
 
 [Code]
+const UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D4E2F1A-6B3C-4E7D-9A1F-5C2B8E4D6F3A}_is1';
 procedure Run(const Exe, Params: String);
 var
   Code: Integer;
@@ -74,6 +75,10 @@ begin
     'Where-Object { $_.CommandLine -match ''dev\.marobotic\.letterbox'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"');
 
   // 2. The installed app's own uninstaller.
+  if not RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', Unins) then
+    Unins := AppDir + '\unins000.exe';
+  Unins := RemoveQuotes(Trim(Unins));
+  if FileExists(Unins) then Run(Unins, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART');
   Unins := AppDir + '\uninstall.exe';
   if FileExists(Unins) then begin
     Run(Unins, '/S');
@@ -96,4 +101,5 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Marobotic\Letterbox');
   RegDeleteKeyIfEmpty(HKCU, 'Software\Marobotic');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Letterbox');
+  RegDeleteKeyIncludingSubkeys(HKCU, UninstallKey);
 end;

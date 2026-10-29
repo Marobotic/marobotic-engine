@@ -16,14 +16,15 @@ server/zoho.ts     Zoho provider (OAuth, token refresh, mail, attachments and se
 ui/                the client (Marochy kit from packages/ui), bundled by build.mjs into dist/
 src-tauri/         the Windows desktop app (Rust + Tauri 2: tray, single-instance, saved session, Downloads)
 icons.py           draws the pixel envelope icon set into src-tauri/icons/
-installer/         standalone Windows uninstaller (Inno Setup 6)
+installer/         Windows setup, standalone uninstaller and build.ps1 (Inno Setup 6)
 deploy.sh          build, back up /opt/marobotic-letterbox, upload, pm2 restart
 ```
 
-Build the Windows app (`Letterbox_0.1.3_x64-setup.exe`):
+Build the Windows app (`Letterbox-<version>-setup.exe` and `Letterbox-Uninstaller.exe` in
+`Documents/Project Exports/Letterbox/Windows`):
 
 ```powershell
-npx tauri build
+npm run app
 ```
 
 Run it locally:

@@ -56,6 +56,7 @@ FinishedLabelNoIcons=Everything Vault added to this computer is gone.%n%nThe Vau
 ClickFinish=Click Finish to close.
 
 [Code]
+const UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6E1B7C2A-3D4F-4A5B-9C8D-7E6F5A4B3C2D}_is1';
 function Policy(i: Integer): String;
 begin
   case i of
@@ -116,6 +117,10 @@ begin
     'Where-Object { $_.CommandLine -match ''dev\.marobotic\.vault'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"');
 
   // 2. The installed app's own uninstaller. It runs from a copy of itself, so wait for the app to go.
+  if not RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', Unins) then
+    Unins := AppDir + '\unins000.exe';
+  Unins := RemoveQuotes(Trim(Unins));
+  if FileExists(Unins) then Run(Unins, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART');
   Unins := AppDir + '\uninstall.exe';
   if FileExists(Unins) then begin
     Run(Unins, '/S');
@@ -145,4 +150,5 @@ begin
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Marobotic\Vault');
   RegDeleteKeyIfEmpty(HKCU, 'Software\Marobotic');
   RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Vault');
+  RegDeleteKeyIncludingSubkeys(HKCU, UninstallKey);
 end;

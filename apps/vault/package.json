@@ -15,7 +15,7 @@
   "scripts": {
     "build:ui": "node build.mjs",
     "tauri": "tauri",
-    "app": "tauri build"
+    "app": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/build.ps1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.1"

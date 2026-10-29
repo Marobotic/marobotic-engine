@@ -25,10 +25,8 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": [
-      "nsis"
-    ],
+    "active": false,
+    "targets": [],
     "publisher": "Marobotic",
     "shortDescription": "Encrypted 2FA, passwords and passkeys",
     "icon": [
@@ -36,11 +34,6 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser"
-      }
-    }
+    ]
   }
 }
