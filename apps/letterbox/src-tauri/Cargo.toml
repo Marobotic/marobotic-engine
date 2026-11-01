@@ -9,6 +9,12 @@ edition = "2021"
 name = "letterbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Embeds dist/ into the binary and serves it from tauri.localhost. `cargo tauri build` turns this on
+# by itself; a hand-run `cargo build` must pass `--features custom-protocol` or the app starts on a
+# blank "Failed to request http://tauri.localhost/" page (the Android build hit exactly that).
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
