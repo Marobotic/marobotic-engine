@@ -391,8 +391,9 @@ function accountPicker() {
 function openAccountMenu(anchor: HTMLElement) {
   const menu = $("acct-menu");
   menu.replaceChildren(el("div", "t", "Accounts"));
-  if (state.accounts.length > 1) menu.append(accountRow(ALL, "All accounts"));
-  for (const a of state.accounts) menu.append(accountRow(a.id, a.email));
+  const picked = state.accounts.length > 1 ? state.account : state.accounts[0]!.id;
+  if (state.accounts.length > 1 && picked !== ALL) menu.append(accountRow(ALL, "All accounts"));
+  for (const a of state.accounts) if (a.id !== picked) menu.append(accountRow(a.id, a.email));
   const add = el("div", "m-nav acct add");
   add.append(el("span", "pic", "\uf067"), el("span", "name", "Add Zoho account"));
   add.onclick = () => { closeAccountMenu(); void addAccount(); };
@@ -442,7 +443,9 @@ function notifyNewMail(fresh: Mail[]) {
     const from = m.from || m.fromAddress || "New message";
     const subj = m.subject || "(no subject)";
     const to = state.accounts.length > 1 ? ` · ${accountOf(m.account)?.email ?? ""}` : "";
-    void platform.notify(from + to, m.summary ? `${subj} — ${m.summary}` : subj);
+    void platform.notify(from + to, m.summary ? `${subj} — ${m.summary}` : subj, {
+      account: m.account, folderId: m.folderId, id: m.id, from, subject: subj,
+    });
     return;
   }
   const body = fresh.slice(0, 3).map((m) => `${m.from || m.fromAddress}: ${m.subject || "(no subject)"}`).join("\n");
@@ -781,7 +784,13 @@ async function load(reset: boolean, quiet = false) {
   renderList();
   $("more").hidden = state.done;
 }
-$("refresh").onclick = () => { load(true); countUnread(); countImportant(); };
+// Refresh is also the way back when the first load never finished (see start() below).
+$("refresh").onclick = () => {
+  if (!state.accounts.length) { retryWait = RETRY_FIRST_MS; return void start(); }
+  load(true);
+  countUnread();
+  countImportant();
+};
 $("more").onclick = () => load(false);
 
 // ---------- search: every mailbox at once ----------
@@ -810,6 +819,7 @@ $("q").oninput = () => { if (!$<HTMLInputElement>("q").value && state.current ==
 // Check for new mail in the background too; refresh the visible list when on page 1 with nothing selected.
 setInterval(() => {
   if ($("app").hidden) return;
+  if (!state.accounts.length) return void start();   // still offline from the first load
   countUnread();
   if (document.hidden || !$("reader").hidden || state.selected.size || state.loading || state.current === SEARCH) return;
   if (state.messages.length > PAGE || $("list").scrollTop > 40) return;
@@ -910,6 +920,22 @@ function wireFrameLinks(frame: HTMLIFrameElement) {
   window.setTimeout(attach, 60);
 }
 
+// A letter laid out wider than the frame (a fixed-width table, a big logo) is cut off at the right on a
+// phone: shrink the whole letter to the frame's width instead of leaving it to scroll sideways.
+function fitFrame(frame: HTMLIFrameElement) {
+  const fit = () => {
+    const doc = frame.contentDocument;
+    const root = doc?.documentElement;
+    if (!root) return;
+    root.style.zoom = "";
+    const room = frame.clientWidth;
+    const wide = root.scrollWidth;
+    if (room > 0 && wide > room + 2) root.style.zoom = String(Math.max(0.35, (room / wide) * 0.995));
+  };
+  frame.addEventListener("load", fit);
+  for (const ms of [60, 400, 1200]) window.setTimeout(fit, ms);
+}
+
 // Each letter gets a new frame, built before it goes into the page. Loading a second document into
 // the same sandboxed frame left it blank in Chrome and Brave: the mail arrived but never painted.
 function showLetter(html: string | null) {
@@ -922,7 +948,10 @@ function showLetter(html: string | null) {
   frame.referrerPolicy = "no-referrer";
   if (html !== null) frame.srcdoc = letter(html);
   $("r-body").replaceWith(frame);
-  if (platform.inApp && html !== null) wireFrameLinks(frame);
+  if (platform.inApp && html !== null) {
+    wireFrameLinks(frame);
+    fitFrame(frame);
+  }
 }
 
 function syncReaderStar() {
@@ -1242,17 +1271,55 @@ function showMain() {
   $("listview").hidden = none;
   if (none) { $("reader").hidden = true; renderFolders(); sync("No mailboxes yet", "var(--faint)"); }
 }
+// The first load can fail for a moment: the server restarting, the laptop waking, or the app's own
+// webview coming up before the machine has a network. That used to leave the window dead on "Offline"
+// for good: no mailbox list meant nothing for the 30-second check or Refresh to fetch, and only
+// restarting the app helped. Now the start keeps trying, with a pause that grows to half a minute, and
+// takes the window over the moment the server answers.
+const RETRY_FIRST_MS = 2_000;
+const RETRY_MAX_MS = 30_000;
+let retryTimer = 0;
+let retryWait = RETRY_FIRST_MS;
+let starting = false;
+
+function showRetrying(message: string) {
+  $("app").hidden = false;
+  sync("Offline · retrying", "var(--orange)");
+  $("list").replaceChildren(el("div", "error", `${message} Trying again…`));
+}
+function retryLater() {
+  clearTimeout(retryTimer);
+  retryTimer = window.setTimeout(() => { retryTimer = 0; void start(); }, retryWait);
+  retryWait = Math.min(retryWait * 2, RETRY_MAX_MS);
+}
+
+/** Load the accounts and their folders, then show the mail. Safe to call again while it is retrying. */
 async function start() {
-  if (platform.inApp && !platform.getSession()) {
-    const saved = await platform.initSession();
-    if (!saved) return showGate();
-  }
+  if (starting) return;
+  starting = true;
   try {
-    await loadAccounts();
+    if (platform.inApp && !platform.getSession()) {
+      const saved = await platform.initSession();
+      if (!saved) return showGate();
+    }
+    try {
+      await loadAccounts();
+    } catch (e) {
+      const err = e as HttpError;
+      if (err.status === 401) return;                 // api() has put the sign-in page up
+      if (err.status === 403) return showGate(err.message);
+      showRetrying(`Couldn't reach the mailbox: ${err.message}.`);
+      retryLater();
+      return;
+    }
+    retryWait = RETRY_FIRST_MS;
+    clearTimeout(retryTimer);
+    retryTimer = 0;
     $("gate").hidden = true;
     $("app").hidden = false;
     platform.requestNotifications();
     showMain();
+    takeAndroidMail();   // the app may have been opened from a notification
     // Back from Zoho's sign-in on the web: say what came in, and drop it from the address.
     const added = new URLSearchParams(location.search).get("added");
     if (added) {
@@ -1263,13 +1330,55 @@ async function start() {
     openFolder(inboxFolder());
     countUnread();
     countImportant();
-  } catch (e) {
-    const err = e as HttpError;
-    if (err.status === 401) return;
-    if (err.status === 403) return showGate(err.message);
-    $("app").hidden = false;
-    sync("Offline", "var(--orange)");
-    $("list").replaceChildren(el("div", "error", `Couldn't reach the mailbox: ${err.message}`));
+  } finally {
+    starting = false;
   }
 }
+// Windows can say the network is back before the retry timer notices.
+window.addEventListener("online", () => {
+  if (!state.accounts.length) { retryWait = RETRY_FIRST_MS; void start(); }
+});
+
+// A click on a new-mail notification the Windows app showed brings back the mail it was about.
+type ToastMail = { account: string; folderId: string; id: string; from?: string; subject?: string };
+function openFromToast(m: ToastMail) {
+  if (!$("gate").hidden) return;                 // signed out: nothing to open
+  $("app").hidden = false;
+  const mail: Mail = {
+    id: m.id, threadId: null, threadCount: 1, folderId: m.folderId,
+    from: m.from ?? "", fromAddress: "", to: "", subject: m.subject ?? "", summary: "",
+    time: Date.now(), unread: true, attachment: false, flagged: false, account: m.account,
+  };
+  void openMessage(mail);
+}
+const events = (globalThis as {
+  __TAURI__?: { event?: { listen?: <T>(name: string, cb: (e: { payload: T }) => void) => Promise<() => void> } };
+}).__TAURI__?.event;
+void events?.listen?.<string>("open-mail", (e) => {
+  try { openFromToast(JSON.parse(e.payload) as ToastMail); } catch { /* not ours */ }
+});
+// Android keeps the mail a tapped notification was about until the page collects it (MainActivity
+// says when); a page that is still loading asks again on `letterbox-mail-ready`.
+const android = (globalThis as { LetterboxAndroid?: { takeMail?: () => string } }).LetterboxAndroid;
+function takeAndroidMail() {
+  try {
+    const raw = android?.takeMail?.();
+    if (raw) openFromToast(JSON.parse(raw) as ToastMail);
+  } catch { /* not ours */ }
+}
+window.addEventListener("letterbox-mail-ready", takeAndroidMail);
+
+// Android's back button (MainActivity): close what is open on top; false lets the app go to the
+// background, back to the app before it.
+(window as unknown as { letterboxBack?: () => boolean }).letterboxBack = () => {
+  if (!$("acct-menu").hidden) closeAccountMenu();
+  else if (!$("ctx").hidden) closeContextMenu();
+  else if (!$("composer").hidden) closeCompose();
+  else if (!$("settings").hidden) closeSettings();
+  else if (!$("reader").hidden) closeReader();
+  else if (state.selected.size) { state.selected.clear(); renderList(); }
+  else if (state.current === SEARCH) clearSearch();
+  else return false;
+  return true;
+};
 start();

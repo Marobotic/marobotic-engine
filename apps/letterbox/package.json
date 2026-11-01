@@ -1,6 +1,6 @@
 {
   "name": "@marobotic/letterbox",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "private": true,
   "type": "module",
   "description": "Letterbox: Marobotic's mail client on a Zoho mailbox.",

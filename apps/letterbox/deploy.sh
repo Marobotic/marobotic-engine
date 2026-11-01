@@ -4,8 +4,8 @@
 # Zoho client config: /etc/marobotic/letterbox-zoho-app.json; account store/key: /var/lib/marobotic-letterbox and /etc/marobotic/letterbox.key. The carry-over Self Client config is /etc/marobotic/letterbox-zoho.json (never in this repo).
 set -euo pipefail
 cd "$(dirname "$0")"
-KEY="${DROPLET_KEY:-$HOME/Documents/Droplets/id_ed25519_claude}"
-HOST="${DROPLET:-root@157.245.131.195}"
+KEY="${DROPLET_KEY:-$HOME/Documents/Droplets/bluehost/id_ed25519_bluehost}"
+HOST="${DROPLET:-root@129.121.150.7}"
 ssh_() { ssh -i "$KEY" -o IdentitiesOnly=yes "$HOST" "$@"; }
 node build.mjs
 tar -czf - server dist package.json | ssh_ 'set -e
@@ -13,7 +13,7 @@ tar -czf - server dist package.json | ssh_ 'set -e
   if [ -d $D ]; then cp -a $D $D.bak-$(date +%s); fi
   mkdir -p $D.new && tar -xzf - -C $D.new
   rm -rf $D && mv $D.new $D
-  if pm2 describe letterbox >/dev/null 2>&1; then pm2 restart letterbox --update-env >/dev/null
+  if pm2 describe letterbox >/dev/null 2>&1; then pm2 restart letterbox --update-env
   else
     LETTERBOX_ZOHO_APP=/etc/marobotic/letterbox-zoho-app.json LETTERBOX_DATA=/var/lib/marobotic-letterbox LETTERBOX_KEY=/etc/marobotic/letterbox.key \
     LETTERBOX_ZOHO=/etc/marobotic/letterbox-zoho.json LETTERBOX_CARRY_OVER=mi@marobotic.dev LETTERBOX_PORT=8970 \

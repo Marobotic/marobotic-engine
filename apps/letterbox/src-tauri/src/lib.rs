@@ -167,37 +167,64 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn toast(app: &tauri::AppHandle, title: String, body: String, mail: Option<serde_json::Value>) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tauri::Emitter;
+    use tauri_winrt_notification::{Sound, Toast};
+    // The Start menu shortcut the installer makes carries this AppUserModelID, so Windows shows the
+    // toast as Letterbox. Without it the toast is credited to PowerShell, or never shows at all.
+    const APP_ID: &str = "dev.marobotic.letterbox";
+    let payload = mail.map(|m| m.to_string()).unwrap_or_default();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Windows keeps the toast in Action Center, and can still be clicked, only while this
+        // object lives; the thread waits for the click or the dismissal and then lets it go.
+        let (tx, rx) = mpsc::channel::<()>();
+        let clicked = tx.clone();
+        let dismissed = tx.clone();
+        let handle = app.clone();
+        let args = payload.clone();
+        let toast = Toast::new(APP_ID)
+            .title(&title)
+            .text1(&body)
+            .sound(Some(Sound::Mail))
+            .on_activated(move |_| {
+                let _ = clicked.send(());
+                let app = handle.clone();
+                let args = args.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    show_main(&app);
+                    if !args.is_empty() {
+                        let _ = app.emit("open-mail", args);
+                    }
+                });
+                Ok(())
+            })
+            .on_dismissed(move |_| {
+                let _ = dismissed.send(());
+                Ok(())
+            });
+        if toast.show().is_ok() {
+            let _ = rx.recv_timeout(Duration::from_secs(6 * 60 * 60));
+        }
+    });
+}
+
+/// A new-mail notification. `mail` is what a click on it should open (account, folder and message
+/// id); the Windows toast hands it back to the page as the `open-mail` event.
 #[tauri::command]
-fn notify(title: String, body: String) {
+fn notify(app: tauri::AppHandle, title: String, body: String, mail: Option<serde_json::Value>) {
     let t = clip(if title.trim().is_empty() { "Letterbox" } else { &title }, 60);
     let b = clip(if body.trim().is_empty() { "New message" } else { &body }, 200);
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let exe = std::env::current_exe().ok().and_then(|p| p.into_os_string().into_string().ok()).unwrap_or_default();
-        let ps = "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; \
-                  $n = New-Object System.Windows.Forms.NotifyIcon; \
-                  try { if ($env:LETTERBOX_EXE) { $n.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:LETTERBOX_EXE) } } catch {}; \
-                  if (-not $n.Icon) { $n.Icon = [System.Drawing.SystemIcons]::Information }; \
-                  $n.Text = 'Letterbox'; \
-                  $n.Visible = $true; \
-                  $n.ShowBalloonTip(10000, $env:LETTERBOX_TITLE, $env:LETTERBOX_BODY, [System.Windows.Forms.ToolTipIcon]::None); \
-                  Start-Sleep -Seconds 11; \
-                  $n.Dispose()";
-        let _ = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps])
-            .env("LETTERBOX_EXE", exe)
-            .env("LETTERBOX_TITLE", &t)
-            .env("LETTERBOX_BODY", &b)
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+        toast(&app, t, b, mail);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        let _ = (&app, mail);
         let _ = std::process::Command::new("notify-send").args(["-a", "Letterbox", &t, &b]).spawn();
     }
 }

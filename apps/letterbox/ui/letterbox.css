@@ -59,7 +59,7 @@
 #acct-menu .m-nav.acct { height: 36px; }
 #acct-menu .m-nav.acct .name { flex: 1; min-width: 0; }
 #acct-menu .add { color: var(--muted); }
-.m-nav.acct .pic { background: var(--surface2); }
+.m-nav.acct .pic { background: var(--surface2); line-height: 1; }
 .settings .set b .pic { display: inline-flex; margin-right: 10px; color: #fff; font: 700 11px var(--mono); }
 
 /* each mailbox: its colour, its name over its folders */
@@ -237,9 +237,12 @@ a.file:hover { border-color: var(--fg); }
   .mail > :not(.pick, .env) { padding: 4px 0; }
   .mail .pick { grid-area: box; } .mail .env { grid-area: env; } .mail .from { grid-area: from; }
   .mail .side-info { grid-area: info; } .mail .text { grid-area: text; }
+  /* Reading is a page of its own: the sidebar has no business under a letter on a phone, and the
+     mail gets the whole screen. */
+  #reader { position: fixed; inset: 0; z-index: 7; background: var(--bg); }
   .rtop { padding: 10px 16px; }
   .rhead { padding: 12px 16px 10px; }
-  .letter { flex: none; margin: 0; height: 75vh; } /* a real height: the frame's 100% of a min-height is 150px */
+  .letter { flex: 1; height: auto; min-height: 0; margin: 0; }
   .overlay { padding: 0; place-items: stretch; }
   .compose { max-height: 100vh; height: 100vh; border: 0; }
   .drop-hint { display: none; }

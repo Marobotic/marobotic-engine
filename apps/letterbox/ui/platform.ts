@@ -29,11 +29,21 @@ export async function initSession(): Promise<string> {
   } catch {
     sessionToken = "";
   }
+  const bridge = android();
+  if (bridge && sessionToken) {
+    // So the background check works without signing in again after an update.
+    try { bridge.saveSession(sessionToken, serverBase()); } catch { /* ignore */ }
+  }
   return sessionToken;
 }
 
 export async function setSession(token: string): Promise<void> {
   sessionToken = token;
+  const bridge = android();
+  if (bridge) {
+    // The background check (MailWorker) reads the session from here while the app is closed.
+    try { bridge.saveSession(token, serverBase()); } catch { /* ignore */ }
+  }
   if (!tauri) return;
   try {
     await tauri<void>("save_session", { session: token });
@@ -72,19 +82,42 @@ export async function openUrl(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-/** Ask the browser for notification permission once the user is signed in (no-op in the Windows app). */
+/** Android's side of things, from MainActivity.kt; undefined on every other platform. */
+type AndroidBridge = {
+  notify: (title: string, body: string, mail: string | null) => void;
+  requestNotifications: () => void;
+  takeMail: () => string;
+  saveSession: (token: string, server: string) => void;
+};
+const android = (): AndroidBridge | undefined =>
+  (globalThis as { LetterboxAndroid?: AndroidBridge }).LetterboxAndroid;
+
+/** Ask for notification permission once the user is signed in (Windows shows toasts without asking). */
 export function requestNotifications(): void {
+  const bridge = android();
+  if (bridge) {
+    try { bridge.requestNotifications(); } catch { /* ignore */ }
+    return;
+  }
   if (tauri) return;
   if (typeof Notification !== "undefined" && Notification.permission === "default") {
     void Notification.requestPermission().catch(() => {});
   }
 }
 
+/** The mail a notification is about, so clicking the notification opens it. */
+export type NotifyMail = { account: string; folderId: string; id: string; from?: string; subject?: string };
+
 /** Show a device notification for newly arrived mail. */
-export async function notify(title: string, body: string): Promise<void> {
+export async function notify(title: string, body: string, mail?: NotifyMail): Promise<void> {
+  const bridge = android();
+  if (bridge) {
+    try { bridge.notify(title, body, mail ? JSON.stringify(mail) : null); } catch { /* ignore */ }
+    return;
+  }
   if (tauri) {
     try {
-      await tauri<void>("notify", { title, body });
+      await tauri<void>("notify", { title, body, mail });
     } catch { /* ignore */ }
     return;
   }
