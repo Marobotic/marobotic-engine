@@ -195,7 +195,7 @@ function signInScreen(message = "", mode: "signin" | "create" | "forgot" = "sign
     }
   };
   $("#quick")?.addEventListener("click", () => void quickUnlock());
-  autoUnlock = platform.isAndroid && quick ? () => void quickUnlock(true) : null;
+  autoUnlock = (platform.isAndroid || platform.isIos) && quick ? () => void quickUnlock(true) : null;
   if (autoUnlock) queueMicrotask(() => autoUnlock?.());
 
   form.onsubmit = async (ev) => {
@@ -1572,6 +1572,9 @@ setInterval(() => {
 }, 1000);
 
 (async () => {
+  // The Keychain, not localStorage, survives app updates. Refresh the cached flag before sign-in
+  // renders so the button is present whenever the protected password is still saved.
+  if (platform.isIos) await platform.quickUnlock.present();
   await init();
   // Browser-only preview: ?dev opens a throwaway local vault with sample data (never in the app).
   if (!platform.inApp && location.search.includes("dev")) {

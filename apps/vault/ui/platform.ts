@@ -169,6 +169,7 @@ function nativeAnswer<T>(start: (id: number) => void): Promise<T> {
 // here so the sign-in screen knows straight away; the Keychain item is what really unlocks.
 const ios = tauri && isIos;
 const IOS_ON = "vault.quickUnlock";
+let iosPresence: Promise<boolean> | undefined;
 const iosOn = (on?: boolean) => {
   try {
     if (on === true) localStorage.setItem(IOS_ON, "1");
@@ -181,6 +182,14 @@ export const quickUnlock = {
   label: ios ? "Face ID" : "fingerprint or screen lock",
   /** "unavailable" (no fingerprint/screen lock, or not a phone), "ready", or "saved". */
   state: (): string => (android ? android.unlockState() : ios ? (iosOn() ? "saved" : "ready") : "unavailable"),
+  /** Refresh the iPhone's cached state from Keychain metadata, without prompting for Face ID. */
+  present: (): Promise<boolean> => {
+    if (!ios) return Promise.resolve(false);
+    return iosPresence ??= tauri!<boolean>("unlock_present").then(
+      (present) => (iosOn(present), present),
+      () => (iosOn(false), false),
+    );
+  },
   clear: () => {
     if (android) return android.unlockClear();
     if (ios) { iosOn(false); void tauri("unlock_clear"); }

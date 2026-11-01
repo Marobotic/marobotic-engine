@@ -8,9 +8,10 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 use core_foundation_sys::base::{CFTypeRef, OSStatus};
 use core_foundation_sys::data::CFDataRef;
+use core_foundation_sys::dictionary::CFDictionaryRef;
 use core_foundation_sys::string::CFStringRef;
 use security_framework_sys::access_control::{kSecAccessControlUserPresence, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, SecAccessControlCreateWithFlags};
-use security_framework_sys::item::{kSecAttrAccessControl, kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnData, kSecValueData};
+use security_framework_sys::item::{kSecAttrAccessControl, kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnAttributes, kSecReturnData, kSecValueData};
 use security_framework_sys::keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete};
 
 #[link(name = "Security", kind = "framework")]
@@ -40,6 +41,20 @@ fn item() -> Vec<(CFString, CFType)> {
 
 pub fn clear() {
     unsafe { SecItemDelete(CFDictionary::from_CFType_pairs(&item()).as_concrete_TypeRef()) };
+}
+
+/// Check whether quick unlock is saved without reading the protected secret or showing Face ID.
+pub fn present() -> bool {
+    let mut query = item();
+    query.push((key(kSecReturnAttributes), CFBoolean::true_value().as_CFType()));
+    let mut out: CFTypeRef = std::ptr::null();
+    let status = unsafe { SecItemCopyMatching(CFDictionary::from_CFType_pairs(&query).as_concrete_TypeRef(), &mut out) };
+    if status == 0 && !out.is_null() {
+        unsafe { drop(CFDictionary::wrap_under_create_rule(out as CFDictionaryRef)) };
+        true
+    } else {
+        false
+    }
 }
 
 /// Saving needs no Face ID; it fails when the iPhone has no passcode (nothing to seal it with).

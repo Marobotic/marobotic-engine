@@ -453,6 +453,12 @@ fn unlock_clear() {
     quick_unlock::clear();
 }
 
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn unlock_present() -> bool {
+    quick_unlock::present()
+}
+
 #[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn unlock_save() -> Result<(), String> {
@@ -466,6 +472,12 @@ fn unlock_open() -> Result<(), String> {
 #[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn unlock_clear() {}
+
+#[cfg(not(target_os = "ios"))]
+#[tauri::command]
+fn unlock_present() -> bool {
+    false
+}
 
 /// The otpauth:// link Vault was started with (Windows), handed to the window once.
 struct LaunchLink(std::sync::Mutex<Option<String>>);
@@ -557,7 +569,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             app_version, vault_path, load_vault, save_vault, xl_send, scan_screen, snip_shot, snip_show, snip_decode, snip_done, set_link_handler, take_launch_link, show_window, set_browser_lockdown, browser_lockdown_state, extension_browsers, open_extensions, open_extension_folder,
-            unlock_save, unlock_open, unlock_clear
+            unlock_save, unlock_open, unlock_clear, unlock_present
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vault");
