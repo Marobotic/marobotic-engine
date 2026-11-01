@@ -45,7 +45,7 @@ pub fn clear() {
 /// Check whether quick unlock is saved without reading the protected secret or showing Face ID.
 pub fn present() -> bool {
     let mut query = item();
-    query.push((key(kSecReturnAttributes), CFBoolean::true_value().as_CFType()));
+    unsafe { query.push((key(kSecReturnAttributes), CFBoolean::true_value().as_CFType())) };
     let mut out: CFTypeRef = std::ptr::null();
     let status = unsafe { SecItemCopyMatching(CFDictionary::from_CFType_pairs(&query).as_concrete_TypeRef(), &mut out) };
     if status == 0 && !out.is_null() {
