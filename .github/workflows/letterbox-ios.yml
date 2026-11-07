@@ -30,6 +30,8 @@ jobs:
         run: |
           npx tauri ios init
           # Letterbox's own icon (full-bleed, from src-tauri/icons/ios) over the template's placeholder
+          # --ios-color fills the art's transparent corners (iOS icons are opaque; the default is white).
+          npx tauri icon src-tauri/icons/icon.png --ios-color "#121212"
           cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
           npx tauri ios build --export-method debugging --no-sign || true
           # Fall back to a plain unsigned xcodebuild so we always get a .app to zip
