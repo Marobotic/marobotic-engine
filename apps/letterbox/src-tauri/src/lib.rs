@@ -123,6 +123,19 @@ fn clip(s: &str, max_chars: usize) -> String {
     out
 }
 
+/// On the iPhone the only browser is Safari; tauri-plugin-opener hands the URL to UIKit.
+#[cfg(target_os = "ios")]
+#[tauri::command]
+fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let u = url.trim();
+    if !(u.starts_with("https://") || u.starts_with("http://")) {
+        return Err("only http and https links can be opened".into());
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(u, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     let u = url.trim();
@@ -160,7 +173,7 @@ fn open_url(url: String) -> Result<(), String> {
     {
         let _ = std::process::Command::new("open").arg(u).spawn();
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
     {
         let _ = std::process::Command::new("xdg-open").arg(u).spawn();
     }
@@ -222,10 +235,15 @@ fn notify(app: tauri::AppHandle, title: String, body: String, mail: Option<serde
     {
         toast(&app, t, b, mail);
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    // iOS has no local notifications here yet; Android and Windows do (MainActivity, toast()).
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
     {
         let _ = (&app, mail);
         let _ = std::process::Command::new("notify-send").args(["-a", "Letterbox", &t, &b]).spawn();
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+    {
+        let _ = (&app, &t, &b, mail);
     }
 }
 
@@ -266,6 +284,9 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    // Open http(s) links in Safari (open_url above).
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

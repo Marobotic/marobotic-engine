@@ -5,7 +5,7 @@
 .error-text { color: color-mix(in srgb, var(--accent) 60%, white); font-size: 13px; }
 
 /* signed out: the same screen as Hourglass, Jukebox and Vault */
-.signin { width: min(380px, calc(100% - 32px)); margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 24px 0; }
+.signin { width: min(380px, calc(100% - 32px)); margin: 0 auto; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: calc(24px + env(safe-area-inset-top)) 0 calc(24px + env(safe-area-inset-bottom)); }
 .signin[hidden] { display: none; }
 .signin .pixel { align-self: center; shape-rendering: crispEdges; }
 .signin .title { align-self: center; margin-top: 10px; font: 700 26px var(--mono); }
@@ -212,10 +212,12 @@ a.file:hover { border-color: var(--fg); }
 #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 20; }
 
 @media (max-width: 720px) {
-  .app { flex-direction: column; height: auto; min-height: 100vh; }
-  .side { width: auto; padding: 12px 16px 0; border-right: 0; border-bottom: 1px solid var(--border); }
+  /* iPhone: the notch and the home indicator are not ours, so every full-height screen stays
+     inside the safe area (viewport-fit=cover is in index.html). */
+  .app { flex-direction: column; height: auto; min-height: 100vh; min-height: 100dvh; }
+  .side { width: auto; padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left)); border-right: 0; border-bottom: 1px solid var(--border); }
   .brand { padding: 0 0 10px; }
-  .compose-btn { position: fixed; right: 16px; bottom: 16px; z-index: 5; margin: 0; }
+  .compose-btn { position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 5; margin: 0; }
   .app:has(#reader:not([hidden])) .compose-btn { display: none; } /* reading has Reply; the button would sit on the mail */
   #folders { flex-direction: row; overflow-x: auto; padding-bottom: 8px; }
   .m-nav, .m-nav.sub { flex: none; padding: 0 12px; font-size: 13px; }
@@ -226,12 +228,12 @@ a.file:hover { border-color: var(--fg); }
   .acct-head { flex: none; padding: 0 4px 0 8px; }
   .nav-sep { flex: none; width: 1px; height: auto; margin: 4px 4px; }
   .acct-err { flex: none; }
-  .sp-head { padding: 0 10px; }
-  .sp-body > .content { padding: 4px 16px 28px; }
-  .top { padding: 14px 16px 4px 28px; flex-wrap: wrap; row-gap: 8px; }
+  .sp-head { padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(10px + env(safe-area-inset-left)); }
+  .sp-body > .content { padding: 4px calc(16px + env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
+  .top { padding: 14px calc(16px + env(safe-area-inset-right)) 4px calc(28px + env(safe-area-inset-left)); flex-wrap: wrap; row-gap: 8px; }
   .search { order: 3; flex: 1 0 100%; }
-  .list { padding: 0 16px 70px; }
-  .bulk { margin: 6px 16px 0; }
+  .list { padding: 0 calc(16px + env(safe-area-inset-right)) calc(70px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
+  .bulk { margin: 6px calc(16px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left)); }
   .wide { display: none; }
   .mail { grid-template-columns: 40px 28px 1fr auto; grid-template-areas: "box env from info" "box env text text"; row-gap: 0; }
   .mail > :not(.pick, .env) { padding: 4px 0; }
@@ -239,13 +241,15 @@ a.file:hover { border-color: var(--fg); }
   .mail .side-info { grid-area: info; } .mail .text { grid-area: text; }
   /* Reading is a page of its own: the sidebar has no business under a letter on a phone, and the
      mail gets the whole screen. */
-  #reader { position: fixed; inset: 0; z-index: 7; background: var(--bg); }
+  #reader { position: fixed; inset: 0; z-index: 7; background: var(--bg); padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   .rtop { padding: 10px 16px; }
   .rhead { padding: 12px 16px 10px; }
   .letter { flex: 1; height: auto; min-height: 0; margin: 0; }
-  .overlay { padding: 0; place-items: stretch; }
-  .compose { max-height: 100vh; height: 100vh; border: 0; }
+  .overlay { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); place-items: stretch; }
+  .compose { max-height: 100%; height: 100%; border: 0; }
   .drop-hint { display: none; }
   .compose footer { justify-content: space-between; }
   .compose .body { min-height: 160px; }
+  #settings { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #toast { bottom: calc(22px + env(safe-area-inset-bottom)); }
 }

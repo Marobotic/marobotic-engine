@@ -30,6 +30,10 @@ tauri-winrt-notification = "0.8"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# Tapping a link (Zoho sign-in, a link in a letter) opens Safari, the iPhone's only browser.
+tauri-plugin-opener = "2"
+
 [profile.release]
 codegen-units = 1
 lto = true
